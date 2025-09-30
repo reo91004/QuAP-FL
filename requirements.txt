@@ -1,0 +1,11 @@
+# requirements.txt
+# QuAP-FL: Quantile-based Adaptive Privacy for Federated Learning
+
+torch==2.0.0
+torchvision==0.15.0
+numpy==1.23.0
+scipy==1.10.0
+matplotlib==3.7.0
+tqdm==4.65.0
+pandas==2.0.0
+scikit-learn==1.2.0
