@@ -15,6 +15,8 @@ import torch
 import random
 import sys
 import os
+import json
+import logging
 from datetime import datetime
 
 # 현재 디렉토리를 sys.path에 추가
@@ -43,6 +45,39 @@ def set_seed(seed: int):
         torch.cuda.manual_seed_all(seed)
         torch.backends.cudnn.deterministic = True
         torch.backends.cudnn.benchmark = False
+
+
+def setup_logging(log_path: str):
+    """
+    로깅 시스템 설정 (터미널 + 파일)
+
+    Args:
+        log_path: 로그 파일 경로
+    """
+    logger = logging.getLogger()
+    logger.setLevel(logging.INFO)
+
+    # 기존 핸들러 제거
+    for handler in logger.handlers[:]:
+        logger.removeHandler(handler)
+
+    # 포맷 설정
+    formatter = logging.Formatter('[%(asctime)s] [%(levelname)s] %(message)s',
+                                  datefmt='%Y-%m-%d %H:%M:%S')
+
+    # 파일 핸들러
+    file_handler = logging.FileHandler(log_path, mode='w', encoding='utf-8')
+    file_handler.setLevel(logging.INFO)
+    file_handler.setFormatter(formatter)
+    logger.addHandler(file_handler)
+
+    # 터미널 핸들러
+    console_handler = logging.StreamHandler(sys.stdout)
+    console_handler.setLevel(logging.INFO)
+    console_handler.setFormatter(formatter)
+    logger.addHandler(console_handler)
+
+    return logger
 
 
 def main():
@@ -101,8 +136,16 @@ def main():
     # 출력 디렉토리 생성
     os.makedirs(args.output_dir, exist_ok=True)
 
+    # 타임스탬프 생성
+    timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+
+    # 로깅 설정
+    log_path = os.path.join(args.output_dir, f'{args.dataset}_seed{args.seed}_{timestamp}.log')
+    logger = setup_logging(log_path)
+    logger.info(f"로그 파일 생성: {log_path}")
+
     # 데이터 준비
-    print(f"\n데이터셋 준비: {args.dataset.upper()}")
+    logger.info(f"데이터셋 준비: {args.dataset.upper()}")
     print(f"Non-IID 분할 (Dirichlet α=0.5) with {config['num_clients']} clients")
 
     client_indices, train_dataset, test_dataset = prepare_non_iid_data(
@@ -173,13 +216,37 @@ def main():
             else:
                 print(f"✗ 목표 미달성 (목표: {target:.3f}, 차이: {diff:.1f}%)")
 
-    # 결과 저장
+    # 결과 저장 (JSON)
+    result_data = {
+        'metadata': {
+            'dataset': args.dataset,
+            'seed': args.seed,
+            'timestamp': timestamp,
+            'target_accuracy': TARGET_ACCURACY.get(args.dataset),
+            'final_accuracy': float(final_acc),
+            'final_loss': float(final_loss),
+            'hyperparameters': config
+        },
+        'history': {
+            'test_accuracy': [float(x) for x in history.get('test_accuracy', [])],
+            'test_loss': [float(x) for x in history.get('test_loss', [])],
+            'clip_values': [float(x) for x in history.get('clip_values', [])],
+            'noise_levels': [float(x) for x in history.get('noise_levels', [])],
+            'privacy_budgets': [float(x) for x in history.get('privacy_budgets', [])],
+            'participation_stats': history.get('participation_stats', [])
+        }
+    }
+
     result_path = os.path.join(
         args.output_dir,
-        f'results_{args.dataset}_seed{args.seed}.npy'
+        f'{args.dataset}_seed{args.seed}_{timestamp}.json'
     )
-    np.save(result_path, history, allow_pickle=True)
-    print(f"\n결과 저장: {result_path}")
+
+    with open(result_path, 'w', encoding='utf-8') as f:
+        json.dump(result_data, f, indent=2, ensure_ascii=False)
+
+    logger.info(f"결과 저장: {result_path}")
+    print(f"결과 저장: {result_path}")
 
     # 참여 통계
     if history['participation_stats']:
