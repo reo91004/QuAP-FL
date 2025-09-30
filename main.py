@@ -121,7 +121,9 @@ def main():
     # 디바이스 설정
     if torch.cuda.is_available():
         device = torch.device(f'cuda:{args.gpu}')
-        print(f"Using GPU: {torch.cuda.get_device_name(args.gpu)}")
+        device_name = torch.cuda.get_device_name(args.gpu)
+        # GPU 정보는 로그 전에 출력되므로 직접 print
+        print(f"Using GPU: {device_name}")
     else:
         device = torch.device('cpu')
         print("Using CPU")
@@ -146,7 +148,7 @@ def main():
 
     # 데이터 준비
     logger.info(f"데이터셋 준비: {args.dataset.upper()}")
-    print(f"Non-IID 분할 (Dirichlet α=0.5) with {config['num_clients']} clients")
+    logger.info(f"Non-IID 분할 (Dirichlet α=0.5) with {config['num_clients']} clients")
 
     client_indices, train_dataset, test_dataset = prepare_non_iid_data(
         args.dataset,
@@ -157,9 +159,9 @@ def main():
     )
 
     # 데이터 분포 확인
-    print(f"Training samples: {len(train_dataset)}")
-    print(f"Test samples: {len(test_dataset)}")
-    print(f"Samples per client: {len(train_dataset) // config['num_clients']} (avg)")
+    logger.info(f"Training samples: {len(train_dataset)}")
+    logger.info(f"Test samples: {len(test_dataset)}")
+    logger.info(f"Samples per client: {len(train_dataset) // config['num_clients']} (avg)")
 
     # 모델 초기화
     if args.dataset == 'mnist':
@@ -169,7 +171,7 @@ def main():
     else:
         raise ValueError(f"Unknown dataset: {args.dataset}")
 
-    print(f"Model parameters: {model.get_num_parameters():,}")
+    logger.info(f"Model parameters: {model.get_num_parameters():,}")
 
     # QuAP-FL 서버 초기화
     server = QuAPFLServer(
@@ -179,17 +181,18 @@ def main():
         client_indices=client_indices,
         dataset_name=args.dataset,
         config=config,
-        device=device
+        device=device,
+        logger=logger
     )
 
     # 학습 시작
-    print("\n" + "=" * 60)
-    print(f"QuAP-FL 학습 시작 - {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
-    print(f"Dataset: {args.dataset.upper()}")
-    print(f"Target: {TARGET_ACCURACY.get(args.dataset, 'N/A')}")
-    print(f"Privacy budget (ε): {config['epsilon_total']}")
-    print(f"Seed: {args.seed}")
-    print("=" * 60)
+    logger.info("=" * 60)
+    logger.info(f"QuAP-FL 학습 시작 - {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+    logger.info(f"Dataset: {args.dataset.upper()}")
+    logger.info(f"Target: {TARGET_ACCURACY.get(args.dataset, 'N/A')}")
+    logger.info(f"Privacy budget (ε): {config['epsilon_total']}")
+    logger.info(f"Seed: {args.seed}")
+    logger.info("=" * 60)
 
     # 학습 실행
     history = server.train()
@@ -198,23 +201,24 @@ def main():
     final_acc = history['test_accuracy'][-1] if history['test_accuracy'] else 0
     final_loss = history['test_loss'][-1] if history['test_loss'] else 0
 
-    print("\n" + "=" * 60)
-    print("최종 결과")
-    print("=" * 60)
-    print(f"최종 정확도: {final_acc:.4f}")
-    print(f"최종 손실: {final_loss:.4f}")
+    logger.info("")
+    logger.info("=" * 60)
+    logger.info("최종 결과")
+    logger.info("=" * 60)
+    logger.info(f"최종 정확도: {final_acc:.4f}")
+    logger.info(f"최종 손실: {final_loss:.4f}")
 
     # 목표 달성 확인
     if args.dataset in TARGET_ACCURACY:
         target = TARGET_ACCURACY[args.dataset]
         if abs(final_acc - target) <= 0.01:
-            print(f"✓ 목표 성능 달성! (목표: {target:.3f})")
+            logger.info(f"✓ 목표 성능 달성! (목표: {target:.3f})")
         else:
             diff = (final_acc - target) * 100
             if diff > 0:
-                print(f"✓ 목표 초과 달성! (+{diff:.1f}%)")
+                logger.info(f"✓ 목표 초과 달성! (+{diff:.1f}%)")
             else:
-                print(f"✗ 목표 미달성 (목표: {target:.3f}, 차이: {diff:.1f}%)")
+                logger.info(f"✗ 목표 미달성 (목표: {target:.3f}, 차이: {diff:.1f}%)")
 
     # 결과 저장 (JSON)
     result_data = {
@@ -246,23 +250,25 @@ def main():
         json.dump(result_data, f, indent=2, ensure_ascii=False)
 
     logger.info(f"결과 저장: {result_path}")
-    print(f"결과 저장: {result_path}")
 
     # 참여 통계
     if history['participation_stats']:
         final_stats = history['participation_stats'][-1]
-        print("\n참여 통계:")
-        print(f"  - 평균 참여율: {final_stats['mean_participation_rate']:.3f}")
-        print(f"  - 참여 클라이언트: {final_stats['participating_clients']}/{config['num_clients']}")
+        logger.info("")
+        logger.info("참여 통계:")
+        logger.info(f"  - 평균 참여율: {final_stats['mean_participation_rate']:.3f}")
+        logger.info(f"  - 참여 클라이언트: {final_stats['participating_clients']}/{config['num_clients']}")
 
     # 프라이버시 통계
     if history['privacy_budgets']:
         mean_budget = np.mean(history['privacy_budgets'])
-        print(f"\n프라이버시 예산:")
-        print(f"  - 평균 라운드당 예산: {mean_budget:.6f}")
-        print(f"  - 총 예산: {config['epsilon_total']:.1f}")
+        logger.info("")
+        logger.info("프라이버시 예산:")
+        logger.info(f"  - 평균 라운드당 예산: {mean_budget:.6f}")
+        logger.info(f"  - 총 예산: {config['epsilon_total']:.1f}")
 
-    print("\n" + "=" * 60)
+    logger.info("")
+    logger.info("=" * 60)
 
 
 if __name__ == "__main__":

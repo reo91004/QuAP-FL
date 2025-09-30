@@ -7,8 +7,10 @@
 """
 
 import numpy as np
+import logging
 import sys
 import os
+from typing import Optional
 
 # 상위 디렉토리 import를 위한 경로 추가
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
@@ -143,7 +145,8 @@ def validate_implementation() -> bool:
         return True
 
 
-def check_milestone(dataset: str, round_num: int, accuracy: float) -> bool:
+def check_milestone(dataset: str, round_num: int, accuracy: float,
+                    logger: Optional[logging.Logger] = None) -> bool:
     """
     중간 점검 - 이 범위를 벗어나면 구현에 문제가 있음
 
@@ -151,12 +154,19 @@ def check_milestone(dataset: str, round_num: int, accuracy: float) -> bool:
         dataset: 'mnist' or 'cifar10'
         round_num: 현재 라운드 번호
         accuracy: 현재 정확도
+        logger: 로거 (None이면 print 사용)
 
     Returns:
         True if accuracy is in expected range, False otherwise
     """
+    def _log(msg: str):
+        if logger:
+            logger.info(msg)
+        else:
+            print(msg)
+
     if dataset not in EXPECTED_MILESTONES:
-        print(f"Warning: Unknown dataset '{dataset}'")
+        _log(f"Warning: Unknown dataset '{dataset}'")
         return True
 
     key = f'round_{round_num}'
@@ -168,11 +178,11 @@ def check_milestone(dataset: str, round_num: int, accuracy: float) -> bool:
     min_acc, max_acc = EXPECTED_MILESTONES[dataset][key]
 
     if min_acc <= accuracy <= max_acc:
-        print(f"✓ Round {round_num}: {accuracy:.3f} (정상 범위: {min_acc:.3f}-{max_acc:.3f})")
+        _log(f"✓ Round {round_num}: {accuracy:.3f} (정상 범위: {min_acc:.3f}-{max_acc:.3f})")
         return True
     else:
-        print(f"✗ Round {round_num}: {accuracy:.3f} (예상 범위: {min_acc:.3f}-{max_acc:.3f})")
-        print(f"  경고: 구현에 문제가 있을 수 있습니다.")
+        _log(f"✗ Round {round_num}: {accuracy:.3f} (예상 범위: {min_acc:.3f}-{max_acc:.3f})")
+        _log(f"  경고: 구현에 문제가 있을 수 있습니다.")
         return False
 
 

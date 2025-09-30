@@ -22,6 +22,7 @@ import torch.optim as optim
 from torch.utils.data import DataLoader
 from typing import List, Optional, Dict
 from tqdm import tqdm
+import logging
 import sys
 import os
 
@@ -49,7 +50,8 @@ class QuAPFLServer:
         client_indices: List[List[int]],
         dataset_name: str,
         config: Optional[Dict] = None,
-        device: Optional[torch.device] = None
+        device: Optional[torch.device] = None,
+        logger: Optional[logging.Logger] = None
     ):
         """
         Args:
@@ -60,12 +62,14 @@ class QuAPFLServer:
             dataset_name: 'mnist' or 'cifar10'
             config: 하이퍼파라미터 (None이면 기본값 사용)
             device: 디바이스 (None이면 자동 선택)
+            logger: 로거 (None이면 print 사용)
         """
         self.model = model
         self.train_dataset = train_dataset
         self.test_dataset = test_dataset
         self.client_indices = client_indices
         self.dataset_name = dataset_name
+        self.logger = logger
 
         # 설정
         self.config = config if config is not None else HYPERPARAMETERS
@@ -111,6 +115,18 @@ class QuAPFLServer:
 
         # 현재 라운드
         self.current_round = 0
+
+    def _log(self, message: str):
+        """
+        로거가 있으면 logger.info()로, 없으면 print()로 출력
+
+        Args:
+            message: 출력할 메시지
+        """
+        if self.logger:
+            self.logger.info(message)
+        else:
+            print(message)
 
     def select_clients(self, round_t: int) -> List[int]:
         """
@@ -291,11 +307,11 @@ class QuAPFLServer:
 
         핵심 9단계를 정확히 따른다 (순서 변경 금지)
         """
-        print("=" * 60)
-        print(f"QuAP-FL Training Start: {self.dataset_name.upper()}")
-        print(f"Target Accuracy: {TARGET_ACCURACY.get(self.dataset_name, 'N/A')}")
-        print(f"Clients: {self.num_clients}, Rounds: {self.num_rounds}")
-        print("=" * 60)
+        self._log("=" * 60)
+        self._log(f"QuAP-FL Training Start: {self.dataset_name.upper()}")
+        self._log(f"Target Accuracy: {TARGET_ACCURACY.get(self.dataset_name, 'N/A')}")
+        self._log(f"Clients: {self.num_clients}, Rounds: {self.num_rounds}")
+        self._log("=" * 60)
 
         for round_t in tqdm(range(self.num_rounds), desc="Training"):
             self.current_round = round_t
@@ -359,20 +375,20 @@ class QuAPFLServer:
                 self.history['participation_stats'].append(stats)
 
                 # 중간 체크포인트 검증
-                check_milestone(self.dataset_name, round_t, accuracy)
+                check_milestone(self.dataset_name, round_t, accuracy, logger=self.logger)
 
-                print(f"\nRound {round_t}: Acc={accuracy:.4f}, Loss={loss:.4f}, "
-                      f"Clip={current_clip:.4f}")
+                self._log(f"\nRound {round_t}: Acc={accuracy:.4f}, Loss={loss:.4f}, "
+                          f"Clip={current_clip:.4f}")
 
                 # 조기 종료 체크
                 if self.check_convergence(accuracy):
-                    print(f"\n목표 성능 달성! Round {round_t}")
+                    self._log(f"\n목표 성능 달성! Round {round_t}")
                     break
 
         # 최종 평가
         final_accuracy, final_loss = self.evaluate()
-        print("\n" + "=" * 60)
-        print(f"최종 결과: Accuracy={final_accuracy:.4f}, Loss={final_loss:.4f}")
-        print("=" * 60)
+        self._log("\n" + "=" * 60)
+        self._log(f"최종 결과: Accuracy={final_accuracy:.4f}, Loss={final_loss:.4f}")
+        self._log("=" * 60)
 
         return self.history
