@@ -11,7 +11,12 @@
 import argparse
 import numpy as np
 import os
+import json
 from pathlib import Path
+from tabulate import tabulate
+
+from config import TARGET_ACCURACY, VISUALIZATION_CONFIG, OUTPUT_CONFIG
+from utils import plot_multi_seed_comparison
 
 
 def aggregate_results(dataset: str, result_dir: str = './results', seeds: list = None):
@@ -24,31 +29,30 @@ def aggregate_results(dataset: str, result_dir: str = './results', seeds: list =
         seeds: 시드 리스트 (None이면 자동 탐지)
     """
     if seeds is None:
-        # 결과 파일 자동 탐지
-        pattern = f'results_{dataset}_seed*.npy'
+        # 결과 파일 자동 탐지 (JSON 형식)
+        pattern = f'{dataset}_seed*.json'
         result_files = list(Path(result_dir).glob(pattern))
 
         if len(result_files) == 0:
-            print(f"No result files found for {dataset}")
+            print(f"No result files found for {dataset} in {result_dir}")
+            print("Expected format: {dataset}_seed{number}_{timestamp}.json")
             return
 
         seeds = []
         for f in result_files:
             # 파일명에서 시드 추출
-            name = f.stem
-            seed_str = name.split('seed')[-1]
-            try:
-                seed = int(seed_str)
-                seeds.append(seed)
-            except ValueError:
-                continue
+            name = f.stem  # 파일명 (확장자 제외)
+            parts = name.split('_')
+            for part in parts:
+                if part.startswith('seed'):
+                    try:
+                        seed = int(part.replace('seed', ''))
+                        if seed not in seeds:
+                            seeds.append(seed)
+                    except ValueError:
+                        continue
 
         seeds = sorted(seeds)
-    else:
-        result_files = [
-            Path(result_dir) / f'results_{dataset}_seed{seed}.npy'
-            for seed in seeds
-        ]
 
     print("=" * 60)
     print(f"결과 집계: {dataset.upper()}")
@@ -58,35 +62,54 @@ def aggregate_results(dataset: str, result_dir: str = './results', seeds: list =
 
     # 결과 로드
     all_results = []
+    all_histories = []
+
     for seed in seeds:
-        result_path = Path(result_dir) / f'results_{dataset}_seed{seed}.npy'
-        if not result_path.exists():
-            print(f"Warning: {result_path} not found, skipping...")
+        # 해당 시드의 가장 최근 파일 찾기
+        pattern = f'{dataset}_seed{seed}_*.json'
+        matching_files = list(Path(result_dir).glob(pattern))
+
+        if len(matching_files) == 0:
+            print(f"Warning: No results found for seed {seed}, skipping...")
             continue
 
-        result = np.load(result_path, allow_pickle=True).item()
-        all_results.append(result)
+        # 가장 최근 파일 선택 (타임스탬프 기준)
+        latest_file = sorted(matching_files, key=lambda x: x.stem.split('_')[-1])[-1]
+
+        with open(latest_file, 'r', encoding='utf-8') as f:
+            data = json.load(f)
+
+        # history 추출
+        if 'history' in data:
+            history = data['history']
+            all_results.append(data)
+            all_histories.append(history)
+        else:
+            print(f"Warning: {latest_file} has no history, skipping...")
+            continue
 
     if len(all_results) == 0:
         print("No valid results found")
         return
 
-    print(f"유효한 결과: {len(all_results)}개")
+    print(f"유효한 결과: {len(all_histories)}개")
 
     # 최종 정확도 수집
     final_accuracies = []
     final_losses = []
 
-    for result in all_results:
-        if 'test_accuracy' in result and len(result['test_accuracy']) > 0:
-            final_accuracies.append(result['test_accuracy'][-1])
-        if 'test_loss' in result and len(result['test_loss']) > 0:
-            final_losses.append(result['test_loss'][-1])
+    for history in all_histories:
+        if 'test_accuracy' in history and len(history['test_accuracy']) > 0:
+            final_accuracies.append(history['test_accuracy'][-1])
+        if 'test_loss' in history and len(history['test_loss']) > 0:
+            final_losses.append(history['test_loss'][-1])
 
     # 통계 계산
     print("\n" + "=" * 60)
     print("최종 결과 통계")
     print("=" * 60)
+
+    table_data = []
 
     if len(final_accuracies) > 0:
         mean_acc = np.mean(final_accuracies)
@@ -94,40 +117,41 @@ def aggregate_results(dataset: str, result_dir: str = './results', seeds: list =
         min_acc = np.min(final_accuracies)
         max_acc = np.max(final_accuracies)
 
-        print(f"정확도:")
-        print(f"  - 평균: {mean_acc:.4f}")
-        print(f"  - 표준편차: {std_acc:.4f}")
-        print(f"  - 최소: {min_acc:.4f}")
-        print(f"  - 최대: {max_acc:.4f}")
-        print(f"  - 95% 신뢰구간: [{mean_acc - 1.96*std_acc:.4f}, {mean_acc + 1.96*std_acc:.4f}]")
+        table_data.append(["Final Accuracy (Mean)", f"{mean_acc:.4f} ({mean_acc*100:.2f}%)"])
+        table_data.append(["Final Accuracy (Std)", f"{std_acc:.4f}"])
+        table_data.append(["Final Accuracy (Min)", f"{min_acc:.4f} ({min_acc*100:.2f}%)"])
+        table_data.append(["Final Accuracy (Max)", f"{max_acc:.4f} ({max_acc*100:.2f}%)"])
+        table_data.append(["95% CI", f"[{mean_acc - 1.96*std_acc:.4f}, {mean_acc + 1.96*std_acc:.4f}]"])
 
     if len(final_losses) > 0:
         mean_loss = np.mean(final_losses)
         std_loss = np.std(final_losses)
 
-        print(f"\n손실:")
-        print(f"  - 평균: {mean_loss:.4f}")
-        print(f"  - 표준편차: {std_loss:.4f}")
+        table_data.append(["Final Loss (Mean)", f"{mean_loss:.4f}"])
+        table_data.append(["Final Loss (Std)", f"{std_loss:.4f}"])
 
     # 목표 달성 여부
-    from config.hyperparameters import TARGET_ACCURACY
-    if dataset in TARGET_ACCURACY:
+    if dataset in TARGET_ACCURACY and len(final_accuracies) > 0:
         target = TARGET_ACCURACY[dataset]
-        success_rate = sum(acc >= target for acc in final_accuracies) / len(final_accuracies)
+        success_count = sum(acc >= target for acc in final_accuracies)
+        success_rate = success_count / len(final_accuracies)
 
-        print(f"\n목표 달성률:")
-        print(f"  - 목표: {target:.3f}")
-        print(f"  - 달성률: {success_rate:.1%} ({sum(acc >= target for acc in final_accuracies)}/{len(final_accuracies)})")
+        table_data.append(["Target Accuracy", f"{target:.3f} ({target*100:.1f}%)"])
+        table_data.append(["Achievement Rate", f"{success_rate:.1%} ({success_count}/{len(final_accuracies)})"])
+
+    # 테이블 출력
+    print("\n" + tabulate(table_data, headers=["Metric", "Value"], tablefmt="fancy_grid"))
+    print()
 
     # 수렴 속도 분석
     convergence_rounds = []
-    for result in all_results:
-        if 'test_accuracy' not in result or len(result['test_accuracy']) == 0:
+    for history in all_histories:
+        if 'test_accuracy' not in history or len(history['test_accuracy']) == 0:
             continue
 
         # 목표의 90%에 도달하는 라운드 찾기
         target_90 = TARGET_ACCURACY.get(dataset, 0.9) * 0.9
-        accuracies = result['test_accuracy']
+        accuracies = history['test_accuracy']
 
         for i, acc in enumerate(accuracies):
             if acc >= target_90:
@@ -135,40 +159,36 @@ def aggregate_results(dataset: str, result_dir: str = './results', seeds: list =
                 break
 
     if len(convergence_rounds) > 0:
-        print(f"\n수렴 속도 (목표의 90% 달성):")
-        print(f"  - 평균 라운드: {np.mean(convergence_rounds):.1f}")
-        print(f"  - 표준편차: {np.std(convergence_rounds):.1f}")
+        print("=" * 60)
+        print("수렴 속도 (목표의 90% 달성)")
+        print("=" * 60)
+        conv_data = [
+            ["평균 라운드", f"{np.mean(convergence_rounds):.1f}"],
+            ["표준편차", f"{np.std(convergence_rounds):.1f}"],
+        ]
+        print(tabulate(conv_data, tablefmt="simple"))
+        print()
 
-    # 참여 통계
+    # 시각화 생성
+    if VISUALIZATION_CONFIG.get('enabled', True) and OUTPUT_CONFIG.get('save_plots', True):
+        print("=" * 60)
+        print("다중 시드 비교 시각화 생성 중...")
+        print("=" * 60)
+        try:
+            plot_path = plot_multi_seed_comparison(
+                results=all_histories,
+                seeds=seeds,
+                dataset_name=dataset,
+                config=VISUALIZATION_CONFIG,
+                save_path=None  # 자동 경로 생성
+            )
+            print(f"시각화 저장: {plot_path}")
+        except Exception as e:
+            print(f"시각화 생성 실패: {e}")
+
     print("\n" + "=" * 60)
-    print("참여 통계")
+    print("집계 완료")
     print("=" * 60)
-
-    for i, result in enumerate(all_results):
-        if 'participation_stats' in result and len(result['participation_stats']) > 0:
-            final_stats = result['participation_stats'][-1]
-            print(f"\n시드 {seeds[i]}:")
-            print(f"  - 평균 참여율: {final_stats['mean_participation_rate']:.3f}")
-            print(f"  - 참여 클라이언트: {final_stats['participating_clients']}")
-
-    # 프라이버시 통계
-    print("\n" + "=" * 60)
-    print("프라이버시 통계")
-    print("=" * 60)
-
-    all_budgets = []
-    for result in all_results:
-        if 'privacy_budgets' in result:
-            all_budgets.extend(result['privacy_budgets'])
-
-    if len(all_budgets) > 0:
-        print(f"라운드당 프라이버시 예산:")
-        print(f"  - 평균: {np.mean(all_budgets):.6f}")
-        print(f"  - 표준편차: {np.std(all_budgets):.6f}")
-        print(f"  - 최소: {np.min(all_budgets):.6f}")
-        print(f"  - 최대: {np.max(all_budgets):.6f}")
-
-    print("\n" + "=" * 60)
 
 
 def main():

@@ -229,7 +229,7 @@ for round_t in range(num_rounds):
 
 6. Model Update
    └─> QuAPFLServer.update_global_model()
-       └─> model.parameters() -= global_gradient
+       └─> model.parameters() += global_gradient  # gradient는 이미 (local - global) 델타
 ```
 
 ### 프라이버시 예산 흐름
@@ -442,4 +442,46 @@ class ResNetModel(nn.Module):
 
 1. **크로스 디바이스**: 대규모 모바일 배포
 2. **크로스 사일로**: 기관 간 협력 학습
-3. **보안 집계**: Secure aggregation 통합
+
+---
+
+## 버전 1.1.1 주요 수정사항
+
+### 그래디언트 계산 수정
+
+**문제**: 로컬 학습 후 그래디언트 방향이 반대로 계산됨
+```python
+# 잘못된 구현 (v1.1.0 이전)
+diff = global_param.data - local_param.data  # 최적화 반대 방향!
+
+# 수정된 구현 (v1.1.1)
+diff = local_param.data - global_param.data  # 올바른 방향
+```
+
+### 모델 업데이트 로직 수정
+
+**문제**: Learning rate 중복 적용
+```python
+# 잘못된 구현 (v1.1.0 이전)
+param.data -= grad_tensor * learning_rate * decay
+
+# 수정된 구현 (v1.1.1)
+param.data += grad_tensor  # gradient는 이미 (local - global) 델타
+```
+
+### Loss 함수 호환성
+
+**문제**: MNIST 모델이 log_softmax를 출력하는데 CrossEntropyLoss 사용
+```python
+# 잘못된 구현 (v1.1.0 이전)
+criterion = nn.CrossEntropyLoss()  # 이중 log 적용!
+
+# 수정된 구현 (v1.1.1)
+criterion = nn.NLLLoss()  # log_softmax와 호환
+```
+
+### 수치적 안정성 개선
+
+- **QuantileClipper**: NaN/Inf gradient norm 필터링 추가
+- **QuAPFLServer**: Gradient norm 상한 (100) 적용
+- **결과**: Loss 폭발 (5.6e11 → 정상 범위) 및 NaN 전파 해결

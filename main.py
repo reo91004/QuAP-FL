@@ -25,8 +25,12 @@ sys.path.insert(0, os.path.abspath(os.path.dirname(__file__)))
 from models import MNISTModel, CIFAR10Model
 from data import prepare_non_iid_data
 from framework import QuAPFLServer
-from config import HYPERPARAMETERS, TARGET_ACCURACY
-from utils import validate_implementation
+from config import HYPERPARAMETERS, TARGET_ACCURACY, VISUALIZATION_CONFIG, OUTPUT_CONFIG
+from utils import (
+    validate_implementation,
+    plot_training_history,
+    generate_summary_table
+)
 
 
 def set_seed(seed: int):
@@ -135,14 +139,15 @@ def main():
     if args.num_rounds is not None:
         config['num_rounds'] = args.num_rounds
 
-    # 출력 디렉토리 생성
-    os.makedirs(args.output_dir, exist_ok=True)
+    # 출력 디렉토리 생성 (config 우선)
+    output_dir = OUTPUT_CONFIG.get('output_dir', args.output_dir)
+    os.makedirs(output_dir, exist_ok=True)
 
     # 타임스탬프 생성
     timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
 
     # 로깅 설정
-    log_path = os.path.join(args.output_dir, f'{args.dataset}_seed{args.seed}_{timestamp}.log')
+    log_path = os.path.join(output_dir, f'{args.dataset}_seed{args.seed}_{timestamp}.log')
     logger = setup_logging(log_path)
     logger.info(f"로그 파일 생성: {log_path}")
 
@@ -242,7 +247,7 @@ def main():
     }
 
     result_path = os.path.join(
-        args.output_dir,
+        output_dir,
         f'{args.dataset}_seed{args.seed}_{timestamp}.json'
     )
 
@@ -251,21 +256,38 @@ def main():
 
     logger.info(f"결과 저장: {result_path}")
 
-    # 참여 통계
-    if history['participation_stats']:
-        final_stats = history['participation_stats'][-1]
+    # 결과 요약 테이블 출력
+    if VISUALIZATION_CONFIG.get('include_table', True):
         logger.info("")
-        logger.info("참여 통계:")
-        logger.info(f"  - 평균 참여율: {final_stats['mean_participation_rate']:.3f}")
-        logger.info(f"  - 참여 클라이언트: {final_stats['participating_clients']}/{config['num_clients']}")
+        summary_table = generate_summary_table(
+            final_accuracy=final_acc,
+            final_loss=final_loss,
+            dataset_name=args.dataset,
+            seed=args.seed,
+            history=history,
+            config=config
+        )
+        # 테이블은 로거를 통하지 않고 직접 출력 (포맷 유지)
+        print("\n" + summary_table)
 
-    # 프라이버시 통계
-    if history['privacy_budgets']:
-        mean_budget = np.mean(history['privacy_budgets'])
+    # 시각화 생성
+    if VISUALIZATION_CONFIG.get('enabled', True) and OUTPUT_CONFIG.get('save_plots', True):
         logger.info("")
-        logger.info("프라이버시 예산:")
-        logger.info(f"  - 평균 라운드당 예산: {mean_budget:.6f}")
-        logger.info(f"  - 총 예산: {config['epsilon_total']:.1f}")
+        logger.info("시각화 생성 중...")
+        try:
+            plot_path = plot_training_history(
+                history=history,
+                dataset_name=args.dataset,
+                seed=args.seed,
+                config=VISUALIZATION_CONFIG,
+                save_path=os.path.join(
+                    output_dir,
+                    f'{args.dataset}_seed{args.seed}_{timestamp}.{VISUALIZATION_CONFIG.get("format", "png")}'
+                )
+            )
+            logger.info(f"시각화 저장: {plot_path}")
+        except Exception as e:
+            logger.warning(f"시각화 생성 실패: {e}")
 
     logger.info("")
     logger.info("=" * 60)

@@ -196,7 +196,8 @@ class QuAPFLServer:
 
         # Optimizer
         optimizer = optim.SGD(local_model.parameters(), lr=lr)
-        criterion = nn.CrossEntropyLoss()
+        # NLLLoss 사용 (모델이 log_softmax를 출력하므로)
+        criterion = nn.NLLLoss()
 
         # 로컬 에폭 학습
         for epoch in range(self.config['local_epochs']):
@@ -214,7 +215,8 @@ class QuAPFLServer:
         for local_param, global_param in zip(
             local_model.parameters(), self.model.parameters()
         ):
-            diff = global_param.data - local_param.data
+            # 올바른 그래디언트 방향: local - global
+            diff = local_param.data - global_param.data
             gradient.append(diff.view(-1).cpu().numpy())
 
         gradient = np.concatenate(gradient)
@@ -228,6 +230,17 @@ class QuAPFLServer:
         Args:
             aggregated_gradient: 집계된 그래디언트 (1D numpy array)
         """
+        # NaN/Inf 체크
+        if np.any(np.isnan(aggregated_gradient)) or np.any(np.isinf(aggregated_gradient)):
+            print("Warning: NaN or Inf detected in aggregated gradient, skipping update")
+            return
+
+        # 그래디언트 norm 제한 (추가 안전장치)
+        grad_norm = np.linalg.norm(aggregated_gradient)
+        if grad_norm > 100:  # 너무 큰 업데이트 방지
+            aggregated_gradient = aggregated_gradient * (100 / grad_norm)
+            print(f"Warning: Large gradient norm {grad_norm:.2f}, scaling to 100")
+
         idx = 0
         for param in self.model.parameters():
             numel = param.numel()
@@ -238,7 +251,9 @@ class QuAPFLServer:
             grad_tensor = torch.from_numpy(grad).to(self.device).float()
 
             # 파라미터 업데이트
-            param.data -= grad_tensor
+            # gradient는 이미 (local - global) 델타이므로 직접 더해줌
+            # learning rate는 로컬 학습에서 이미 적용됨
+            param.data += grad_tensor
 
             idx += numel
 
@@ -256,7 +271,8 @@ class QuAPFLServer:
             shuffle=False
         )
 
-        criterion = nn.CrossEntropyLoss()
+        # NLLLoss 사용 (모델이 log_softmax를 출력하므로)
+        criterion = nn.NLLLoss()
         total_loss = 0.0
         correct = 0
         total = 0
@@ -313,6 +329,10 @@ class QuAPFLServer:
         self._log(f"Clients: {self.num_clients}, Rounds: {self.num_rounds}")
         self._log("=" * 60)
 
+        # 초기 모델 평가
+        initial_acc, initial_loss = self.evaluate()
+        self._log(f"\nInitial model: Acc={initial_acc:.4f}, Loss={initial_loss:.4f}")
+
         for round_t in tqdm(range(self.num_rounds), desc="Training"):
             self.current_round = round_t
 
@@ -357,6 +377,21 @@ class QuAPFLServer:
                 )
                 self.history['noise_levels'].append(noise_mult)
                 self.history['privacy_budgets'].append(epsilon_i)
+
+            # 디버깅 정보 출력
+            if round_t % 1 == 0:  # 매 라운드마다
+                grad_norms_before = [np.linalg.norm(g) for g in local_gradients]
+                grad_norms_after = [np.linalg.norm(g) for g in clipped_gradients]
+                self._log(f"\n[Debug Round {round_t}]")
+                self._log(f"  Selected clients: {len(selected_clients)}")
+                self._log(f"  Epsilon base: {self.privacy_allocator.epsilon_base:.4f}")
+                self._log(f"  Current clip value: {self.clipper.clip_value:.4f}")
+                self._log(f"  Avg gradient norm before clip: {np.mean(grad_norms_before):.2f}")
+                self._log(f"  Max gradient norm before clip: {np.max(grad_norms_before):.2f}")
+                self._log(f"  Avg gradient norm after clip: {np.mean(grad_norms_after):.2f}")
+                if self.history['noise_levels']:
+                    recent_noise = self.history['noise_levels'][-len(selected_clients):]
+                    self._log(f"  Avg noise level: {np.mean(recent_noise):.2f}")
 
             # 7. 연합 평균
             aggregated_gradient = np.mean(noisy_gradients, axis=0)

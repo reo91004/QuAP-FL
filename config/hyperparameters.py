@@ -12,13 +12,13 @@ HYPERPARAMETERS = {
     'clients_per_round': 30,  # 30% 참여율
 
     # 로컬 학습 설정
-    'local_epochs': 5,
+    'local_epochs': 3,  # 충분한 학습이지만 과도한 드리프트 방지
     'local_batch_size': 32,
-    'learning_rate': 0.01,
-    'lr_decay': 0.99,  # 매 라운드 0.99 곱하기
+    'learning_rate': 0.005,  # 안정적인 학습을 위해 감소
+    'lr_decay': 0.995,  # 느린 감소
 
     # 프라이버시 설정
-    'epsilon_total': 3.0,
+    'epsilon_total': 6.0,  # 프라이버시와 유용성 균형
     'delta': 1e-5,
 
     # 적응형 파라미터 (절대 변경 금지)
@@ -34,7 +34,7 @@ HYPERPARAMETERS = {
 
     # 클리핑 안정성
     'min_clip': 0.1,
-    'max_clip': 10.0,
+    'max_clip': 5.0,  # gradient 폭발 방지를 위해 감소
 }
 
 PRIVACY_CONFIG = {
@@ -66,4 +66,23 @@ EXPECTED_MILESTONES = {
 TARGET_ACCURACY = {
     'mnist': 0.971,   # 97.1%
     'cifar10': 0.812  # 81.2%
+}
+
+# 시각화 설정
+VISUALIZATION_CONFIG = {
+    'enabled': True,              # 시각화 생성 여부
+    'show_plot': False,           # 화면 표시 (False면 저장만)
+    'dpi': 150,                   # 해상도
+    'format': 'png',              # 저장 형식 (png, pdf, svg)
+    'style': 'seaborn-v0_8',      # matplotlib 스타일
+    'figsize': (12, 10),          # Figure 크기
+    'include_table': True,        # 결과 테이블 출력 여부
+}
+
+# 출력 설정
+OUTPUT_CONFIG = {
+    'save_results': True,         # JSON 결과 저장
+    'save_plots': True,           # 시각화 저장
+    'output_dir': './results',    # 출력 디렉토리
+    'log_dir': './results',       # 로그 디렉토리
 }

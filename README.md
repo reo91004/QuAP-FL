@@ -10,6 +10,7 @@ QuAP-FL은 연합학습에서 클라이언트의 불규칙한 참여 패턴을 �
 
 - **적응형 프라이버시 예산**: 참여율에 반비례하는 동적 예산 할당
 - **분위수 기반 클리핑**: 90th percentile 기반 적응형 그래디언트 클리핑
+- **자동 시각화**: 학습 곡선, 프라이버시 예산, 클리핑 값 등 4-subplot 자동 생성
 - **단순한 구현**: 2,500줄 이하 코드, 학부생 수준에서도 재현 가능
 
 ### 성능 목표
@@ -107,9 +108,10 @@ quap-fl/
 ├── data/                  # 데이터 처리
 │   └── data_utils.py              # Non-IID 분할 (Dirichlet α=0.5)
 ├── config/                # 설정
-│   └── hyperparameters.py         # 모든 고정값
+│   └── hyperparameters.py         # 모든 고정값, 시각화 설정
 ├── utils/                 # 유틸리티
-│   └── validation.py              # 검증 테스트
+│   ├── validation.py              # 검증 테스트
+│   └── visualization.py           # 자동 시각화 및 결과 테이블
 ├── tests/                 # 단위 테스트
 │   ├── test_tracker.py
 │   ├── test_privacy.py
@@ -214,6 +216,82 @@ Round 200: Acc=0.9710, Loss=0.0921, Clip=0.5210
 ============================================================
 최종 결과: Accuracy=0.9710, Loss=0.0921
 ============================================================
+```
+
+## 시각화
+
+### 자동 생성되는 결과물
+
+실험 실행 후 자동으로 생성되는 파일들:
+
+```
+results/
+├── mnist_seed42_TIMESTAMP.log      # 학습 로그
+├── mnist_seed42_TIMESTAMP.json     # 결과 데이터
+└── mnist_seed42_TIMESTAMP.png      # 4-subplot 시각화
+```
+
+### 4-Subplot 시각화
+
+자동 생성되는 시각화는 다음을 포함한다:
+
+1. **Test Accuracy over Rounds**
+   - 라운드별 정확도 변화
+   - 목표 정확도선 표시
+
+2. **Test Loss over Rounds**
+   - 라운드별 손실 변화 (log scale)
+   - 학습 안정성 확인
+
+3. **Privacy Budget Consumption**
+   - 누적 프라이버시 예산 (ε)
+   - 총 예산선 표시
+
+4. **Adaptive Clipping Values**
+   - 라운드별 클리핑 임계값 변화
+   - 평균 클리핑 값 표시
+
+### 결과 테이블
+
+학습 완료 후 자동으로 출력되는 요약 테이블:
+
+```
+╒═════════════════════════╤═════════════════════╤════════════════════╕
+│ Metric                  │ Value               │ Status             │
+╞═════════════════════════╪═════════════════════╪════════════════════╡
+│ Final Accuracy          │ 0.9710 (97.10%)     │ Achieved           │
+│ Best Accuracy           │ 0.9752 (97.52%)     │ Round 190          │
+│ Final Loss              │ 0.0921              │ -                  │
+│ Total Privacy Budget    │ ε = 3.0             │ -                  │
+│ Average Clipping        │ 0.5210              │ -                  │
+│ Mean Participation Rate │ 0.300               │ 30 clients         │
+╘═════════════════════════╧═════════════════════╧════════════════════╛
+```
+
+### 다중 시드 비교
+
+여러 시드 실험 후 결과 집계 시 비교 시각화도 자동 생성된다:
+
+```bash
+python aggregate_results.py --dataset mnist
+# → results/mnist_multi_seed_comparison.png
+```
+
+비교 시각화는 다음을 포함:
+- Accuracy Mean ± Std 범위
+- Loss 비교 (log scale)
+- Privacy Budget 분포 히스토그램
+- Final Accuracy 분포 히스토그램
+
+### 시각화 비활성화
+
+필요시 `config/hyperparameters.py`에서 비활성화 가능:
+
+```python
+VISUALIZATION_CONFIG = {
+    'enabled': False,  # 시각화 끄기
+    # ...
+}
 ```
 
 ## 트러블슈팅

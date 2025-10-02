@@ -13,6 +13,72 @@
 - Rényi DP 지원
 - 추가 데이터셋 (FEMNIST, Shakespeare)
 
+## [1.1.1] - 2025-10-01
+
+### Fixed
+- **치명적 버그 수정**: 그래디언트 방향 계산 오류 수정
+  - `framework/server.py`: `global - local` → `local - global`로 수정
+  - 이전 구현은 최적화의 반대 방향으로 업데이트되어 학습이 실패하거나 발산하는 문제 발생
+
+- **Loss 함수 호환성 문제 해결**
+  - `framework/server.py`: MNIST 모델이 `log_softmax`를 출력하는데 `CrossEntropyLoss` 사용하여 이중 log 적용 문제
+  - `nn.CrossEntropyLoss()` → `nn.NLLLoss()`로 변경
+
+- **수치적 안정성 개선**
+  - `framework/quantile_clipping.py`: NaN/Inf gradient norm 필터링 추가
+  - `framework/server.py`: aggregated gradient의 NaN/Inf 체크 및 norm 제한 (100) 추가
+  - 그래디언트 폭발 방지를 위한 안전장치 추가
+
+### Changed
+- **모델 업데이트 로직 간소화**
+  - `framework/server.py`: learning rate가 로컬 학습에서 이미 적용되므로 전역 업데이트에서 중복 적용 제거
+  - `param.data -= grad_tensor` → `param.data += grad_tensor`로 변경 (그래디언트가 이미 델타이므로)
+
+### Impact
+- Loss 폭발 문제 해결 (559,684,661,647 → 정상 범위)
+- NaN 전파 문제 해결
+- 정확도 개선 (0.098 고정 → 정상 학습)
+
+## [1.1.0] - 2025-01-20
+
+### Added
+- **시각화 시스템**: 학습 결과 자동 시각화 기능 추가
+  - `utils/visualization.py` 모듈 생성
+  - `plot_training_history()`: 단일 실험 4-subplot 시각화
+  - `plot_multi_seed_comparison()`: 다중 시드 비교 시각화
+  - `generate_summary_table()`: tabulate 기반 결과 테이블
+- **설정 확장**: `config/hyperparameters.py`에 시각화 관련 설정 추가
+  - `VISUALIZATION_CONFIG`: 시각화 옵션 (enabled, dpi, format, style 등)
+  - `OUTPUT_CONFIG`: 출력 디렉토리 및 저장 옵션
+- **의존성 추가**: `requirements.txt`에 tabulate, seaborn 추가
+
+### Changed
+- `main.py`: 학습 완료 후 자동으로 시각화 생성 및 결과 테이블 출력
+- `aggregate_results.py`: JSON 형식 지원 및 다중 시드 비교 시각화 추가
+- 모든 시각화 옵션이 config 기반으로 통합됨 (명령줄 인자 불필요)
+
+### Features
+- **4-subplot 시각화**:
+  - Test Accuracy over Rounds (목표선 포함)
+  - Test Loss over Rounds (log scale)
+  - Privacy Budget Consumption (총 예산선 포함)
+  - Adaptive Clipping Values (평균선 포함)
+- **다중 시드 비교**:
+  - Accuracy Mean ± Std 범위 표시
+  - Loss 비교 (log scale)
+  - Privacy Budget 분포 히스토그램
+  - Final Accuracy 분포 히스토그램
+- **결과 테이블**:
+  - Final/Best Accuracy, Loss
+  - Privacy metrics
+  - 목표 달성 여부 표시
+  - Participation statistics
+
+### Documentation
+- `docs/API.md`: visualization 모듈 API 문서화
+- `docs/EXPERIMENTS.md`: 시각화 사용법 섹션 추가
+- `README.md`: 시각화 기능 소개 추가
+
 ## [1.0.0] - 2025-01-15
 
 ### Added

@@ -258,66 +258,119 @@ python main.py --dataset mnist --seed 42
 
 ## 결과 분석
 
-### 학습 곡선 시각화
+### 자동 시각화 (권장)
 
-```python
-# experiments/visualize_results.py
-import numpy as np
-import matplotlib.pyplot as plt
+기본적으로 `main.py`는 학습 완료 후 자동으로 시각화를 생성한다.
 
-# 결과 로드
-history = np.load('results/results_mnist_seed42.npy', allow_pickle=True).item()
+```bash
+# 실험 실행 (시각화 자동 생성)
+python main.py --dataset mnist --seed 42
 
-# 정확도 곡선
-plt.figure(figsize=(10, 6))
-plt.plot(history['test_accuracy'], label='Test Accuracy')
-plt.xlabel('Evaluation Step (every 10 rounds)')
-plt.ylabel('Accuracy')
-plt.title('QuAP-FL Learning Curve (MNIST)')
-plt.legend()
-plt.grid(True, alpha=0.3)
-plt.savefig('learning_curve.png', dpi=300)
+# 생성되는 파일들:
+# - results/mnist_seed42_TIMESTAMP.log        (로그)
+# - results/mnist_seed42_TIMESTAMP.json       (결과)
+# - results/mnist_seed42_TIMESTAMP.png        (시각화)
 ```
 
-### 프라이버시 예산 분포
+**생성되는 4-subplot 시각화:**
+1. **Test Accuracy over Rounds**: 정확도 변화 + 목표선
+2. **Test Loss over Rounds**: 손실 변화 (log scale)
+3. **Privacy Budget Consumption**: 누적 프라이버시 예산 + 총 예산선
+4. **Adaptive Clipping Values**: 클리핑 값 변화 + 평균선
+
+### 다중 시드 비교 시각화
+
+```bash
+# 여러 시드로 실험
+python main.py --dataset mnist --seed 42
+python main.py --dataset mnist --seed 123
+python main.py --dataset mnist --seed 999
+
+# 비교 시각화 자동 생성
+python aggregate_results.py --dataset mnist
+
+# 생성되는 파일:
+# - results/mnist_multi_seed_comparison.png
+```
+
+**생성되는 4-subplot 비교 시각화:**
+1. **Test Accuracy**: Mean ± Std 범위 + 개별 궤적
+2. **Test Loss**: Mean 궤적 + 개별 궤적 (log scale)
+3. **Privacy Budget Distribution**: 전체 예산 분포 히스토그램
+4. **Final Accuracy Distribution**: 최종 정확도 분포 + 목표선
+
+### 결과 테이블
+
+학습 완료 후 자동으로 출력되는 결과 테이블:
+
+```
+======================================================================
+QuAP-FL Experiment Results - MNIST (seed=42)
+======================================================================
+╒═════════════════════════╤═════════════════════╤════════════════════╕
+│ Metric                  │ Value               │ Status             │
+╞═════════════════════════╪═════════════════════╪════════════════════╡
+│ Final Accuracy          │ 0.9710 (97.10%)     │ Achieved           │
+│ Best Accuracy           │ 0.9752 (97.52%)     │ Round 190          │
+│ Final Loss              │ 0.0921              │ -                  │
+│ Total Privacy Budget    │ ε = 3.0             │ -                  │
+│ Average Clipping        │ 0.5210              │ -                  │
+│ Mean Participation Rate │ 0.300               │ 30 clients         │
+╘═════════════════════════╧═════════════════════╧════════════════════╛
+======================================================================
+```
+
+### 시각화 설정 커스터마이징
+
+`config/hyperparameters.py`에서 시각화 옵션 변경:
 
 ```python
-# 프라이버시 예산 히스토그램
-budgets = history['privacy_budgets']
+VISUALIZATION_CONFIG = {
+    'enabled': True,           # 시각화 생성 (False로 설정하면 비활성화)
+    'show_plot': False,        # 화면 표시 (True로 설정하면 창으로 표시)
+    'dpi': 300,                # 해상도 (논문용: 300, 일반: 150)
+    'format': 'pdf',           # 형식 (png, pdf, svg)
+    'style': 'seaborn-v0_8',   # matplotlib 스타일
+    'figsize': (14, 12),       # Figure 크기
+    'include_table': True,     # 결과 테이블 출력
+}
+```
 
-plt.figure(figsize=(10, 6))
-plt.hist(budgets, bins=50, alpha=0.7)
-plt.xlabel('Privacy Budget (ε)')
-plt.ylabel('Frequency')
-plt.title('Privacy Budget Distribution')
-plt.savefig('privacy_distribution.png', dpi=300)
+### 수동 시각화 (고급 사용자)
+
+필요시 직접 시각화를 생성할 수 있다:
+
+```python
+import json
+from utils import plot_training_history, plot_multi_seed_comparison
+from config import VISUALIZATION_CONFIG
+
+# 결과 로드
+with open('results/mnist_seed42_TIMESTAMP.json', 'r') as f:
+    data = json.load(f)
+    history = data['history']
+
+# 시각화 생성
+plot_path = plot_training_history(
+    history=history,
+    dataset_name='mnist',
+    seed=42,
+    config=VISUALIZATION_CONFIG,
+    save_path='custom_plot.png'
+)
+print(f"시각화 저장: {plot_path}")
 ```
 
 ### 참여율 분석
 
 ```python
-# 참여율 통계
+# 참여 통계 확인
 final_stats = history['participation_stats'][-1]
 
 print(f"평균 참여율: {final_stats['mean_participation_rate']:.3f}")
 print(f"참여율 표준편차: {final_stats['std_participation_rate']:.3f}")
 print(f"참여 클라이언트: {final_stats['participating_clients']}")
-```
-
-### 클리핑 값 추이
-
-```python
-# 클리핑 값 변화
-clip_values = history['clip_values']
-
-plt.figure(figsize=(10, 6))
-plt.plot(clip_values, label='Clip Value')
-plt.xlabel('Round')
-plt.ylabel('Clip Value')
-plt.title('Adaptive Clipping Value Over Time')
-plt.legend()
-plt.grid(True, alpha=0.3)
-plt.savefig('clip_values.png', dpi=300)
+print(f"한 번도 참여 안 함: {final_stats['never_participated']}")
 ```
 
 ---
@@ -443,6 +496,68 @@ HYPERPARAMETERS = {
 ```bash
 pip list | grep numpy
 pip list | grep torch
+```
+
+### 문제 5: Loss 폭발 및 NaN (v1.1.1에서 해결)
+
+**증상**:
+```
+Round 0: Acc=0.098, Loss=559684661647, Clip=0.2779
+Round 10: Acc=0.098, Loss=nan, Clip=nan
+```
+
+**원인 분석**:
+1. 그래디언트 방향이 반대로 계산됨 (`global - local` 대신 `local - global`)
+2. MNIST 모델의 log_softmax 출력과 CrossEntropyLoss 간 불일치
+3. NaN gradient norm 필터링 부재
+
+**해결책 (v1.1.1 적용)**:
+
+1. **그래디언트 방향 수정**:
+```python
+# framework/server.py:local_training()
+diff = local_param.data - global_param.data  # 올바른 방향
+```
+
+2. **Loss 함수 호환성**:
+```python
+# framework/server.py:local_training(), evaluate()
+criterion = nn.NLLLoss()  # log_softmax와 호환
+```
+
+3. **NaN/Inf 체크 추가**:
+```python
+# framework/quantile_clipping.py:update_clip_value()
+grad_norms = grad_norms[~np.isnan(grad_norms) & ~np.isinf(grad_norms)]
+
+# framework/server.py:update_global_model()
+if np.any(np.isnan(aggregated_gradient)):
+    print("Warning: NaN detected, skipping update")
+    return
+```
+
+4. **Gradient norm 제한**:
+```python
+# framework/server.py:update_global_model()
+if grad_norm > 100:
+    aggregated_gradient = aggregated_gradient * (100 / grad_norm)
+```
+
+### 문제 6: 학습이 진행되지 않음 (v1.1.1에서 해결)
+
+**증상**:
+```
+200 라운드 동안 정확도 0.098 (랜덤 추측 수준) 고정
+```
+
+**원인**:
+모델 업데이트시 learning rate 중복 적용 및 델타 방향 오류
+
+**해결책**:
+```python
+# framework/server.py:update_global_model()
+# gradient는 이미 (local - global) 델타이므로 직접 더함
+param.data += grad_tensor  # -= 대신 +=
 ```
 
 2. **클린 재설치**:

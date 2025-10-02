@@ -87,8 +87,19 @@ class QuantileClipper:
         # L2 norm 계산
         grad_norms = self.compute_gradient_norms(gradients_list)
 
+        # NaN/Inf 필터링
+        grad_norms = grad_norms[~np.isnan(grad_norms) & ~np.isinf(grad_norms)]
+
+        # 유효한 norm이 없으면 이전 값 유지
+        if len(grad_norms) == 0:
+            return self.clip_value if self.clip_value is not None else self.min_clip
+
         # 90th percentile 계산
         current_clip = float(np.percentile(grad_norms, self.quantile * 100))
+
+        # NaN/Inf 체크
+        if np.isnan(current_clip) or np.isinf(current_clip):
+            return self.clip_value if self.clip_value is not None else self.min_clip
 
         # 범위 제한
         current_clip = np.clip(current_clip, self.min_clip, self.max_clip)

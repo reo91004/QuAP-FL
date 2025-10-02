@@ -12,6 +12,7 @@ QuAP-FL의 주요 API 문서다. 각 모듈의 핵심 클래스와 함수를 설
 - [Models](#models)
 - [Data](#data)
 - [Config](#config)
+- [Visualization](#visualization)
 
 ---
 
@@ -215,7 +216,7 @@ clipper = QuantileClipper(
 
 ##### `update_clip_value(gradients_list: List[np.ndarray]) -> float`
 
-그래디언트 norm의 분위수 기반 클리핑 값 업데이트.
+그래디언트 norm의 분위수 기반 클리핑 값 업데이트. NaN/Inf 값은 자동으로 필터링됨.
 
 ```python
 gradients = [np.random.randn(100) for _ in range(10)]
@@ -228,6 +229,10 @@ print(f"현재 클리핑 값: {clip_value:.4f}")
 
 **반환:**
 - `float`: 업데이트된 클리핑 값
+
+**버전 1.1.1 변경사항:**
+- NaN/Inf gradient norm 자동 필터링 추가
+- 유효한 norm이 없을 경우 이전 값 또는 min_clip 반환
 
 ##### `clip_gradient(gradient: np.ndarray) -> np.ndarray`
 
@@ -490,4 +495,255 @@ history = server.train()
 # 결과 출력
 final_acc = history['test_accuracy'][-1]
 print(f"최종 정확도: {final_acc:.4f}")
+```
+
+---
+
+## Visualization
+
+시각화 및 결과 분석 유틸리티.
+
+### plot_training_history
+
+단일 실험의 학습 히스토리를 4-subplot으로 시각화.
+
+```python
+from utils import plot_training_history
+from config import VISUALIZATION_CONFIG
+
+# 시각화 생성
+plot_path = plot_training_history(
+    history=history,
+    dataset_name='mnist',
+    seed=42,
+    config=VISUALIZATION_CONFIG,
+    save_path='./results/mnist_training.png'  # 선택적
+)
+
+print(f"시각화 저장: {plot_path}")
+```
+
+**파라미터:**
+- `history` (Dict): 학습 히스토리 딕셔너리
+  - `test_accuracy`: 테스트 정확도 리스트
+  - `test_loss`: 테스트 손실 리스트
+  - `clip_values`: 클리핑 값 이력
+  - `privacy_budgets`: 프라이버시 예산 이력
+- `dataset_name` (str): 'mnist' or 'cifar10'
+- `seed` (int): 랜덤 시드
+- `config` (Dict): 시각화 설정 (VISUALIZATION_CONFIG)
+- `save_path` (Optional[str]): 저장 경로 (None이면 자동 생성)
+
+**반환:**
+- `str`: 저장된 파일 경로
+
+**생성되는 4-subplot:**
+1. **Test Accuracy over Rounds**: 정확도 변화 (목표선 포함)
+2. **Test Loss over Rounds**: 손실 변화 (log scale)
+3. **Privacy Budget Consumption**: 누적 프라이버시 예산 (총 예산선 포함)
+4. **Adaptive Clipping Values**: 클리핑 값 변화 (평균선 포함)
+
+---
+
+### plot_multi_seed_comparison
+
+다중 시드 실험 결과를 비교 시각화.
+
+```python
+from utils import plot_multi_seed_comparison
+from config import VISUALIZATION_CONFIG
+
+# 여러 실험 결과 로드
+results = []
+seeds = [42, 123, 999]
+
+for seed in seeds:
+    with open(f'results/mnist_seed{seed}.json', 'r') as f:
+        data = json.load(f)
+        results.append(data['history'])
+
+# 비교 시각화
+plot_path = plot_multi_seed_comparison(
+    results=results,
+    seeds=seeds,
+    dataset_name='mnist',
+    config=VISUALIZATION_CONFIG,
+    save_path=None  # 자동 경로
+)
+```
+
+**파라미터:**
+- `results` (List[Dict]): 각 시드의 히스토리 리스트
+- `seeds` (List[int]): 시드 리스트
+- `dataset_name` (str): 데이터셋 이름
+- `config` (Dict): 시각화 설정
+- `save_path` (Optional[str]): 저장 경로
+
+**반환:**
+- `str`: 저장된 파일 경로
+
+**생성되는 4-subplot:**
+1. **Test Accuracy**: Mean ± Std 범위 + 개별 궤적
+2. **Test Loss**: Mean 궤적 + 개별 궤적 (log scale)
+3. **Privacy Budget Distribution**: 히스토그램
+4. **Final Accuracy Distribution**: 히스토그램 (목표선 포함)
+
+---
+
+### generate_summary_table
+
+실험 결과 요약 테이블 생성 (tabulate 기반).
+
+```python
+from utils import generate_summary_table
+
+# 테이블 생성
+table = generate_summary_table(
+    final_accuracy=0.9710,
+    final_loss=0.0921,
+    dataset_name='mnist',
+    seed=42,
+    history=history,
+    config=HYPERPARAMETERS
+)
+
+# 출력
+print(table)
+```
+
+**파라미터:**
+- `final_accuracy` (float): 최종 정확도
+- `final_loss` (float): 최종 손실
+- `dataset_name` (str): 데이터셋 이름
+- `seed` (int): 랜덤 시드
+- `history` (Dict): 학습 히스토리
+- `config` (Dict): 하이퍼파라미터 설정
+
+**반환:**
+- `str`: 포맷된 테이블 문자열
+
+**테이블 내용:**
+- Final Accuracy (목표 대비 달성 여부)
+- Best Accuracy (달성 라운드)
+- Final/Best Loss
+- Total Privacy Budget
+- Average Clipping Value
+- Mean Participation Rate
+
+**예시 출력:**
+```
+======================================================================
+QuAP-FL Experiment Results - MNIST (seed=42)
+======================================================================
+╒═════════════════════════╤═════════════════════╤════════════════════╕
+│ Metric                  │ Value               │ Status             │
+╞═════════════════════════╪═════════════════════╪════════════════════╡
+│ Final Accuracy          │ 0.9710 (97.10%)     │ Achieved           │
+│ Best Accuracy           │ 0.9752 (97.52%)     │ Round 190          │
+│ Final Loss              │ 0.0921              │ -                  │
+│ Total Privacy Budget    │ ε = 3.0             │ -                  │
+│ Average Clipping        │ 0.5210              │ -                  │
+│ Mean Participation Rate │ 0.300               │ 30 clients         │
+╘═════════════════════════╧═════════════════════╧════════════════════╛
+======================================================================
+```
+
+---
+
+## Config (Extended)
+
+### VISUALIZATION_CONFIG
+
+시각화 관련 설정.
+
+```python
+from config import VISUALIZATION_CONFIG
+
+print(f"시각화 활성화: {VISUALIZATION_CONFIG['enabled']}")
+print(f"해상도: {VISUALIZATION_CONFIG['dpi']} DPI")
+print(f"형식: {VISUALIZATION_CONFIG['format']}")
+```
+
+**파라미터:**
+- `enabled` (bool): 시각화 생성 여부, 기본값: True
+- `show_plot` (bool): 화면 표시 여부, 기본값: False (저장만)
+- `dpi` (int): 해상도, 기본값: 150
+- `format` (str): 저장 형식 (png, pdf, svg), 기본값: 'png'
+- `style` (str): matplotlib 스타일, 기본값: 'seaborn-v0_8'
+- `figsize` (tuple): Figure 크기, 기본값: (12, 10)
+- `include_table` (bool): 결과 테이블 출력 여부, 기본값: True
+
+### OUTPUT_CONFIG
+
+출력 디렉토리 및 저장 옵션.
+
+```python
+from config import OUTPUT_CONFIG
+
+print(f"출력 디렉토리: {OUTPUT_CONFIG['output_dir']}")
+print(f"결과 저장: {OUTPUT_CONFIG['save_results']}")
+print(f"시각화 저장: {OUTPUT_CONFIG['save_plots']}")
+```
+
+**파라미터:**
+- `save_results` (bool): JSON 결과 저장, 기본값: True
+- `save_plots` (bool): 시각화 저장, 기본값: True
+- `output_dir` (str): 출력 디렉토리, 기본값: './results'
+- `log_dir` (str): 로그 디렉토리, 기본값: './results'
+
+---
+
+## 시각화 예제
+
+### 전체 파이프라인 (시각화 포함)
+
+```python
+import torch
+from models import MNISTModel
+from data import prepare_non_iid_data
+from framework import QuAPFLServer
+from utils import plot_training_history, generate_summary_table
+from config import VISUALIZATION_CONFIG, OUTPUT_CONFIG
+
+# 시드 고정
+torch.manual_seed(42)
+
+# 데이터 준비
+client_indices, train_dataset, test_dataset = prepare_non_iid_data(
+    'mnist', num_clients=100, alpha=0.5, seed=42
+)
+
+# 모델 및 서버 초기화
+model = MNISTModel()
+server = QuAPFLServer(
+    model=model,
+    train_dataset=train_dataset,
+    test_dataset=test_dataset,
+    client_indices=client_indices,
+    dataset_name='mnist'
+)
+
+# 학습
+history = server.train()
+
+# 결과 테이블 출력
+table = generate_summary_table(
+    final_accuracy=history['test_accuracy'][-1],
+    final_loss=history['test_loss'][-1],
+    dataset_name='mnist',
+    seed=42,
+    history=history,
+    config={}
+)
+print(table)
+
+# 시각화 생성
+if VISUALIZATION_CONFIG['enabled']:
+    plot_path = plot_training_history(
+        history=history,
+        dataset_name='mnist',
+        seed=42,
+        config=VISUALIZATION_CONFIG
+    )
+    print(f"시각화 저장: {plot_path}")
 ```
