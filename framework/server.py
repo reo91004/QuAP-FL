@@ -116,6 +116,17 @@ class QuAPFLServer:
         # 현재 라운드
         self.current_round = 0
 
+        # 핵심 하이퍼파라미터 검증 로그
+        self._log("=" * 60)
+        self._log("핵심 하이퍼파라미터 검증")
+        self._log("=" * 60)
+        self._log(f"  learning_rate: {self.config['learning_rate']}")
+        self._log(f"  max_clip: {self.config['max_clip']}")
+        self._log(f"  epsilon_total: {self.config['epsilon_total']}")
+        self._log(f"  epsilon_base: {epsilon_base:.6f}")
+        self._log(f"  max_agg_norm: {self.config.get('max_agg_norm', 100)}")
+        self._log("=" * 60)
+
     def _log(self, message: str):
         """
         로거가 있으면 logger.info()로, 없으면 print()로 출력
@@ -236,10 +247,11 @@ class QuAPFLServer:
             return
 
         # 그래디언트 norm 제한 (추가 안전장치)
+        max_agg_norm = self.config.get('max_agg_norm', 100)
         grad_norm = np.linalg.norm(aggregated_gradient)
-        if grad_norm > 100:  # 너무 큰 업데이트 방지
-            aggregated_gradient = aggregated_gradient * (100 / grad_norm)
-            print(f"Warning: Large gradient norm {grad_norm:.2f}, scaling to 100")
+        if grad_norm > max_agg_norm:
+            aggregated_gradient = aggregated_gradient * (max_agg_norm / grad_norm)
+            print(f"Warning: Large gradient norm {grad_norm:.2f}, scaling to {max_agg_norm}")
 
         idx = 0
         for param in self.model.parameters():

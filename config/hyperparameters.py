@@ -14,11 +14,11 @@ HYPERPARAMETERS = {
     # 로컬 학습 설정
     'local_epochs': 3,  # 충분한 학습이지만 과도한 드리프트 방지
     'local_batch_size': 32,
-    'learning_rate': 0.005,  # 안정적인 학습을 위해 감소
+    'learning_rate': 0.0005,  # Client drift 완화를 위해 10배 감소
     'lr_decay': 0.995,  # 느린 감소
 
     # 프라이버시 설정
-    'epsilon_total': 6.0,  # 프라이버시와 유용성 균형
+    'epsilon_total': 3.0,  # 논문 목표값 (3.0 @ MNIST 97.1%)
     'delta': 1e-5,
 
     # 적응형 파라미터 (절대 변경 금지)
@@ -34,7 +34,10 @@ HYPERPARAMETERS = {
 
     # 클리핑 안정성
     'min_clip': 0.1,
-    'max_clip': 5.0,  # gradient 폭발 방지를 위해 감소
+    'max_clip': 1.0,  # DP-SGD 표준 범위 (0.1-1.0)
+
+    # Aggregated gradient 제한
+    'max_agg_norm': 10000,  # 노이즈 추가된 gradient 고려 (sqrt(1.2M) * noise_level)
 }
 
 PRIVACY_CONFIG = {

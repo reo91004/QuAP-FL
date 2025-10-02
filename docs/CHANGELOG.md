@@ -13,6 +13,34 @@
 - Rényi DP 지원
 - 추가 데이터셋 (FEMNIST, Shakespeare)
 
+## [1.1.2] - 2025-10-03 (진행 중)
+
+### Changed
+- **하이퍼파라미터 재조정 시도**
+  - `learning_rate`: 0.005 → 0.0005 (Client drift 완화 목적)
+  - `epsilon_total`: 6.0 → 3.0 (논문 목표값 복원)
+  - `max_clip`: 5.0 → 1.0 (DP-SGD 표준 범위 적용)
+
+### Added
+- **Aggregated gradient norm 제한 파라미터**
+  - `config/hyperparameters.py`: `max_agg_norm` 파라미터 추가 (10000)
+  - `framework/server.py`: 하드코딩된 값 (100)을 config 기반으로 변경
+  - 노이즈 추가 후 gradient의 큰 norm을 고려한 설정
+
+- **하이퍼파라미터 검증 로깅**
+  - `framework/server.py`: 초기화 시 핵심 파라미터 출력
+  - learning_rate, max_clip, epsilon_total, epsilon_base, max_agg_norm 값 확인 가능
+
+### Issues
+- **현재 남은 문제**: Learning rate와 privacy budget 간 불균형
+  - Learning rate 0.0005는 epsilon=3.0 대비 부족 (Noise/Signal ratio = 44:1)
+  - Round 0에서 Loss 폭발 (3366), Round 4부터 NaN 재발생
+  - 근본 원인: Gradient signal (0.07)에 비해 DP noise (3.08)가 과다
+  - 해결 방안 검토 중: learning rate 증가 vs epsilon 증가 vs local epochs 증가
+
+### Notes
+이 버전의 하이퍼파라미터는 아직 검증되지 않았다. 프라이버시 예산과 학습 효율성 간의 균형을 찾기 위한 실험이 진행 중이다.
+
 ## [1.1.1] - 2025-10-01
 
 ### Fixed

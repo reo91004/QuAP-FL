@@ -483,5 +483,52 @@ criterion = nn.NLLLoss()  # log_softmax와 호환
 ### 수치적 안정성 개선
 
 - **QuantileClipper**: NaN/Inf gradient norm 필터링 추가
-- **QuAPFLServer**: Gradient norm 상한 (100) 적용
-- **결과**: Loss 폭발 (5.6e11 → 정상 범위) 및 NaN 전파 해결
+- **QuAPFLServer**: Aggregated gradient norm 제한 추가
+  - v1.1.1: 하드코딩된 값 100 사용
+  - v1.1.2: `max_agg_norm` 파라미터로 config 기반 관리 (기본값 10000)
+- **결과**: Loss 폭발 (5.6e11 → 정상 범위) 및 NaN 전파 해결 (v1.1.1)
+
+### v1.1.2 아키텍처 개선
+
+**1. 하이퍼파라미터 중앙화**
+
+모든 하이퍼파라미터가 `config/hyperparameters.py`에서 관리되도록 개선:
+```python
+HYPERPARAMETERS = {
+    # 기존 파라미터들...
+
+    # v1.1.2에서 추가
+    'max_agg_norm': 10000,  # Aggregated gradient norm 제한
+}
+```
+
+**2. 하드코딩 제거**
+
+`framework/server.py:update_global_model()`:
+```python
+# Before (v1.1.1)
+if grad_norm > 100:  # 하드코딩
+    aggregated_gradient = aggregated_gradient * (100 / grad_norm)
+
+# After (v1.1.2)
+max_agg_norm = self.config.get('max_agg_norm', 100)
+if grad_norm > max_agg_norm:
+    aggregated_gradient = aggregated_gradient * (max_agg_norm / grad_norm)
+```
+
+**3. 하이퍼파라미터 검증 로깅**
+
+`QuAPFLServer.__init__()` 시점에 핵심 파라미터 출력:
+```python
+self._log("=" * 60)
+self._log("핵심 하이퍼파라미터 검증")
+self._log("=" * 60)
+self._log(f"  learning_rate: {self.config['learning_rate']}")
+self._log(f"  max_clip: {self.config['max_clip']}")
+self._log(f"  epsilon_total: {self.config['epsilon_total']}")
+self._log(f"  epsilon_base: {epsilon_base:.6f}")
+self._log(f"  max_agg_norm: {self.config.get('max_agg_norm', 100)}")
+self._log("=" * 60)
+```
+
+이를 통해 실험 시작 시 config 값이 올바르게 전달되었는지 즉시 확인 가능하다.
