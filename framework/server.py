@@ -99,7 +99,8 @@ class QuAPFLServer:
             quantile=self.config['clip_quantile'],
             momentum=self.config['clip_momentum'],
             min_clip=self.config['min_clip'],
-            max_clip=self.config['max_clip']
+            max_clip=self.config['max_clip'],
+            initial_clip=1.0
         )
 
         # 통계 추적
@@ -275,6 +276,9 @@ class QuAPFLServer:
             gradient.append(diff.view(-1).cpu().numpy())
 
         gradient = np.concatenate(gradient)
+
+        # Raw gradient로 정규화 (DP-SGD 표준)
+        gradient = gradient / lr
 
         return gradient
 
@@ -486,8 +490,12 @@ class QuAPFLServer:
             else:
                 raise ValueError(f"Unknown noise_strategy: {noise_strategy}")
 
-            # 9. 모델 업데이트
-            self._update_global_model(noisy_gradient)
+            # 9. Learning rate 적용 (DP-SGD 표준)
+            lr = self.config['learning_rate'] * (self.config['lr_decay'] ** round_t)
+            scaled_gradient = noisy_gradient * lr
+
+            # 10. 모델 업데이트
+            self._update_global_model(scaled_gradient)
 
             # 9. 평가 (10 라운드마다)
             if round_t % 10 == 0 or round_t == self.num_rounds - 1:

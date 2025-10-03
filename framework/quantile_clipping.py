@@ -133,8 +133,16 @@ class QuantileClipper:
         if self.clip_value is None:
             raise RuntimeError("clip_value not initialized. Call update_clip_value first.")
 
+        # NaN/Inf 체크
+        if np.any(np.isnan(gradient)) or np.any(np.isinf(gradient)):
+            return np.zeros_like(gradient)
+
         # L2 norm 계산
         norm = np.linalg.norm(gradient.flatten(), ord=2)
+
+        # NaN norm 체크
+        if np.isnan(norm) or np.isinf(norm):
+            return np.zeros_like(gradient)
 
         # 클리핑 필요 여부 확인
         if norm > self.clip_value:
