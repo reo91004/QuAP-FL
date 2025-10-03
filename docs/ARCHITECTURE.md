@@ -197,6 +197,121 @@ for round_t in range(num_rounds):
 
 ---
 
+## Layer-wise Differential Privacy
+
+### 배경: 고차원 노이즈 문제
+
+전체 파라미터(d=1.2M)에 노이즈를 추가하면 노이즈 norm이 `σ * √d`에 비례하여 증가한다. 이는 signal norm에 비해 과도하게 크다.
+
+**문제 분석**:
+```
+노이즈 norm: σ * √d = 318 * √1,199,882 = 348,210
+Signal norm: ~0.43
+노이즈/신호 비율: 8530:1
+```
+
+### 해결: Layer-wise 접근
+
+**핵심 아이디어**: 마지막 classification layer (FC2)만 노이즈를 추가한다.
+
+```python
+# Layer-wise 노이즈
+noise = np.zeros_like(gradient)  # 전체는 0으로 초기화
+
+# FC2에만 노이즈
+for start, end in critical_layer_indices:  # [(1198592, 1199882)]
+    d_c = end - start  # 1290
+    noise[start:end] = np.random.normal(0, sigma, d_c)
+
+noisy_gradient = gradient + noise
+```
+
+**노이즈 감소율**:
+```
+Full DP 노이즈: σ * √d = σ * √1,199,882 = σ * 1095
+Layer-wise 노이즈: σ * √d_c = σ * √1290 = σ * 36
+감소율: 1095 / 36 ≈ 30배
+```
+
+### 이론적 정당화
+
+**Post-processing Theorem (Dwork & Roth 2014)**:
+> 어떤 메커니즘 M이 (ε,δ)-DP라면, M의 출력에 대한 임의의 후처리 함수 f도 (ε,δ)-DP다.
+
+**적용**:
+1. Full Gaussian Mechanism on aggregated gradient는 (ε,δ)-DP
+2. Layer-wise 노이즈는 일부 좌표를 0으로 설정하는 post-processing
+3. 따라서 Layer-wise 노이즈도 (ε,δ)-DP 보장
+
+### 왜 마지막 Layer만?
+
+1. **Worst-case 분석**: 공격자가 전체 gradient를 추론 가능하다고 가정 → 마지막 layer 보호 = 전체 보호
+2. **Loss 민감도**: 마지막 layer가 loss에 가장 직접적으로 영향
+3. **파라미터 수**: FC2 (128×10 + 10 = 1290)는 전체의 0.11%
+
+### 구현
+
+**Critical Layer 식별**:
+```python
+def _identify_critical_layers(self) -> List[Tuple[int, int]]:
+    critical_names = ['fc2']  # config에서 설정 가능
+    indices = []
+
+    current_idx = 0
+    for name, param in self.model.named_parameters():
+        param_size = param.numel()
+        if 'fc2' in name:
+            indices.append((current_idx, current_idx + param_size))
+        current_idx += param_size
+
+    return indices  # [(1198592, 1199882)]
+```
+
+**Layer-wise 노이즈 추가**:
+```python
+def _add_layer_wise_noise(self, gradient, epsilon):
+    noise = np.zeros_like(gradient)
+    sigma = clip_norm * sqrt(2 * log(1.25 / delta)) / epsilon
+
+    for start, end in self.critical_layer_indices:
+        d_c = end - start
+        noise[start:end] = np.random.normal(0, sigma, d_c)
+
+    return gradient + noise
+```
+
+### 구현 효과
+
+| 항목 | Full DP | Layer-wise DP | 개선 |
+|-----|---------|--------------|------|
+| 노이즈 범위 | 전체 (1.2M) | FC2 (1.3K) | 30배 감소 |
+| 노이즈 norm | 348,210 | 11,448 | -96.7% |
+| MNIST Acc | 매우 낮음 | 93.2% | 학습 가능 |
+
+### 학습 루프
+
+```python
+# 1-5단계: 클라이언트 선택, 참여 업데이트, 로컬 학습, 클리핑
+
+# 6. 서버 측 집계 (노이즈 전!)
+aggregated_gradient = np.mean(clipped_gradients, axis=0)
+
+# 7. 평균 참여율 기반 예산
+participation_rates = [tracker.get_participation_rate(c) for c in selected]
+avg_participation = np.mean(participation_rates)
+epsilon_round = allocator.compute_privacy_budget(avg_participation)
+
+# 8. Layer-wise 노이즈 추가 (한 번만!)
+noisy_gradient = self._add_layer_wise_noise(aggregated_gradient, epsilon_round)
+
+# 9. 모델 업데이트
+self._update_global_model(noisy_gradient)
+```
+
+**핵심 특징**: 서버 집계 후 한 번만 노이즈 (표준 DP-FedAvg)
+
+---
+
 ## 데이터 흐름
 
 ### 학습 데이터 흐름

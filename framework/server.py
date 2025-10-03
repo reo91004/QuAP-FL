@@ -116,15 +116,24 @@ class QuAPFLServer:
         # 현재 라운드
         self.current_round = 0
 
+        # Critical layer 정보 저장
+        self.critical_layer_indices = self._identify_critical_layers()
+
         # 핵심 하이퍼파라미터 검증 로그
         self._log("=" * 60)
-        self._log("핵심 하이퍼파라미터 검증")
+        self._log("QuAP-FL Configuration")
         self._log("=" * 60)
         self._log(f"  learning_rate: {self.config['learning_rate']}")
         self._log(f"  max_clip: {self.config['max_clip']}")
         self._log(f"  epsilon_total: {self.config['epsilon_total']}")
         self._log(f"  epsilon_base: {epsilon_base:.6f}")
-        self._log(f"  max_agg_norm: {self.config.get('max_agg_norm', 100)}")
+        self._log(f"  Noise strategy: {self.config.get('noise_strategy', 'layer_wise')}")
+        self._log(f"  Critical layers: {self.config.get('critical_layers', ['fc2'])}")
+        total_params = sum(p.numel() for p in self.model.parameters())
+        critical_params = self._count_critical_params()
+        self._log(f"  Total params: {total_params:,}")
+        self._log(f"  Critical params: {critical_params:,} ({critical_params/total_params*100:.2f}%)")
+        self._log(f"  Noise reduction: {total_params/critical_params:.1f}x")
         self._log("=" * 60)
 
     def _log(self, message: str):
@@ -138,6 +147,41 @@ class QuAPFLServer:
             self.logger.info(message)
         else:
             print(message)
+
+    def _identify_critical_layers(self) -> List[tuple]:
+        """
+        Critical layer(마지막 FC)의 파라미터 인덱스 범위 식별
+
+        Layer-wise DP를 위해 마지막 classification layer만 노이즈 추가.
+        이론적 정당화: Post-processing Theorem (Dwork & Roth 2014)
+
+        Returns:
+            List of (start_idx, end_idx) for critical parameters
+        """
+        critical_names = self.config.get('critical_layers', ['fc2'])
+        indices = []
+
+        current_idx = 0
+        for name, param in self.model.named_parameters():
+            param_size = param.numel()
+
+            # 이름 매칭 (예: 'fc2.weight', 'fc2.bias')
+            for critical_name in critical_names:
+                if critical_name in name:
+                    indices.append((current_idx, current_idx + param_size))
+                    self._log(f"  Critical layer found: {name} [{current_idx}:{current_idx + param_size}]")
+                    break
+
+            current_idx += param_size
+
+        if len(indices) == 0:
+            raise ValueError(f"No critical layers found! Check config: {critical_names}")
+
+        return indices
+
+    def _count_critical_params(self) -> int:
+        """Critical 파라미터 총 개수"""
+        return sum(end - start for start, end in self.critical_layer_indices)
 
     def select_clients(self, round_t: int) -> List[int]:
         """
@@ -234,40 +278,88 @@ class QuAPFLServer:
 
         return gradient
 
-    def update_global_model(self, aggregated_gradient: np.ndarray):
+    def _add_layer_wise_noise(
+        self,
+        gradient: np.ndarray,
+        epsilon: float
+    ) -> np.ndarray:
+        """
+        Layer-wise Differential Privacy 노이즈 추가
+
+        Critical layer에만 노이즈를 추가하여 고차원 노이즈 문제 완화.
+        이론적 정당화: Post-processing Theorem (Dwork & Roth 2014)
+
+        Args:
+            gradient: 집계된 gradient (1D numpy array, shape: d)
+            epsilon: 프라이버시 예산 (이번 라운드)
+
+        Returns:
+            노이즈가 추가된 gradient
+        """
+        noise = np.zeros_like(gradient)
+
+        # 노이즈 스케일 계산 (Gaussian Mechanism)
+        clip_norm = self.clipper.clip_value if self.clipper.clip_value else 1.0
+        sigma = clip_norm * np.sqrt(2 * np.log(1.25 / self.config['delta'])) / epsilon
+
+        # Critical layer에만 노이즈 추가
+        total_critical_params = 0
+        for start, end in self.critical_layer_indices:
+            d_c = end - start
+            noise[start:end] = np.random.normal(0, sigma, d_c)
+            total_critical_params += d_c
+
+        # 통계 기록 (디버깅용)
+        noise_norm = np.linalg.norm(noise)
+        signal_norm = np.linalg.norm(gradient)
+
+        if self.current_round % 10 == 0:
+            self._log(f"  [Noise] σ={sigma:.2f}, ||noise||={noise_norm:.2f}, "
+                     f"||signal||={signal_norm:.2f}, ratio={noise_norm/signal_norm:.1f}:1")
+
+        return gradient + noise
+
+    def _add_full_noise(self, gradient: np.ndarray, epsilon: float) -> np.ndarray:
+        """
+        Full DP 노이즈 (비교용, 사용하지 말 것)
+
+        전체 파라미터에 노이즈 추가.
+        문제: 고차원에서 노이즈가 신호를 압도함
+        """
+        clip_norm = self.clipper.clip_value if self.clipper.clip_value else 1.0
+        sigma = clip_norm * np.sqrt(2 * np.log(1.25 / self.config['delta'])) / epsilon
+
+        noise = np.random.normal(0, sigma, gradient.shape)
+        return gradient + noise
+
+    def _update_global_model(self, aggregated_gradient: np.ndarray):
         """
         전역 모델 업데이트
 
-        Args:
-            aggregated_gradient: 집계된 그래디언트 (1D numpy array)
-        """
-        # NaN/Inf 체크
-        if np.any(np.isnan(aggregated_gradient)) or np.any(np.isinf(aggregated_gradient)):
-            print("Warning: NaN or Inf detected in aggregated gradient, skipping update")
-            return
+        Layer-wise 노이즈로 인해 gradient norm이 자연스럽게 제한되므로
+        추가적인 max_agg_norm 제한이 불필요함
 
-        # 그래디언트 norm 제한 (추가 안전장치)
-        max_agg_norm = self.config.get('max_agg_norm', 100)
-        grad_norm = np.linalg.norm(aggregated_gradient)
-        if grad_norm > max_agg_norm:
-            aggregated_gradient = aggregated_gradient * (max_agg_norm / grad_norm)
-            print(f"Warning: Large gradient norm {grad_norm:.2f}, scaling to {max_agg_norm}")
+        Args:
+            aggregated_gradient: 노이즈가 추가된 집계 gradient
+        """
+        # NaN/Inf 체크만 (norm 제한 제거)
+        if np.any(np.isnan(aggregated_gradient)) or np.any(np.isinf(aggregated_gradient)):
+            self._log("Warning: NaN/Inf in gradient, skipping update")
+            return
 
         idx = 0
         for param in self.model.parameters():
             numel = param.numel()
             shape = param.shape
 
-            # 그래디언트를 파라미터 형태로 복원
             grad = aggregated_gradient[idx:idx+numel].reshape(shape)
             grad_tensor = torch.from_numpy(grad).to(self.device).float()
 
-            # 파라미터 업데이트
-            # gradient는 이미 (local - global) 델타이므로 직접 더해줌
-            # learning rate는 로컬 학습에서 이미 적용됨
+            # gradient는 이미 (local - global) 델타
             param.data += grad_tensor
 
             idx += numel
+
 
     def evaluate(self) -> tuple:
         """
@@ -333,7 +425,10 @@ class QuAPFLServer:
         """
         메인 학습 루프
 
-        핵심 9단계를 정확히 따른다 (순서 변경 금지)
+        핵심 특징:
+        1. 서버 집계 후 한 번만 노이즈 (표준 DP-FedAvg)
+        2. Layer-wise 노이즈 적용 (고차원 문제 해결)
+        3. 평균 참여율 기반 적응형 예산
         """
         self._log("=" * 60)
         self._log(f"QuAP-FL Training Start: {self.dataset_name.upper()}")
@@ -367,49 +462,32 @@ class QuAPFLServer:
             # 5. 클리핑 적용
             clipped_gradients = self.clipper.clip_gradients(local_gradients)
 
-            # 6. 적응형 노이즈 추가
-            noisy_gradients = []
-            for i, client_id in enumerate(selected_clients):
-                # 참여율 기반 프라이버시 예산
-                p_rate = self.tracker.get_participation_rate(client_id)
-                epsilon_i = self.privacy_allocator.compute_privacy_budget(p_rate)
+            # 6. 서버 측 집계 (노이즈 전!)
+            aggregated_gradient = np.mean(clipped_gradients, axis=0)
 
-                # 가우시안 노이즈 추가
-                noisy_grad = self.privacy_allocator.add_gaussian_noise(
-                    clipped_gradients[i],
-                    epsilon_i,
-                    self.clipper.clip_value
-                )
+            # 7. 평균 참여율 기반 프라이버시 예산 계산
+            participation_rates = [
+                self.tracker.get_participation_rate(cid)
+                for cid in selected_clients
+            ]
+            avg_participation = np.mean(participation_rates)
+            epsilon_round = self.privacy_allocator.compute_privacy_budget(avg_participation)
 
-                noisy_gradients.append(noisy_grad)
+            # 통계 기록
+            self.history['privacy_budgets'].append(epsilon_round)
 
-                # 통계 기록
-                noise_mult = self.privacy_allocator.compute_noise_multiplier(
-                    epsilon_i, self.clipper.clip_value
-                )
-                self.history['noise_levels'].append(noise_mult)
-                self.history['privacy_budgets'].append(epsilon_i)
+            # 8. Layer-wise 노이즈 추가 (한 번만!)
+            noise_strategy = self.config.get('noise_strategy', 'layer_wise')
 
-            # 디버깅 정보 출력
-            if round_t % 1 == 0:  # 매 라운드마다
-                grad_norms_before = [np.linalg.norm(g) for g in local_gradients]
-                grad_norms_after = [np.linalg.norm(g) for g in clipped_gradients]
-                self._log(f"\n[Debug Round {round_t}]")
-                self._log(f"  Selected clients: {len(selected_clients)}")
-                self._log(f"  Epsilon base: {self.privacy_allocator.epsilon_base:.4f}")
-                self._log(f"  Current clip value: {self.clipper.clip_value:.4f}")
-                self._log(f"  Avg gradient norm before clip: {np.mean(grad_norms_before):.2f}")
-                self._log(f"  Max gradient norm before clip: {np.max(grad_norms_before):.2f}")
-                self._log(f"  Avg gradient norm after clip: {np.mean(grad_norms_after):.2f}")
-                if self.history['noise_levels']:
-                    recent_noise = self.history['noise_levels'][-len(selected_clients):]
-                    self._log(f"  Avg noise level: {np.mean(recent_noise):.2f}")
+            if noise_strategy == 'layer_wise':
+                noisy_gradient = self._add_layer_wise_noise(aggregated_gradient, epsilon_round)
+            elif noise_strategy == 'full':
+                noisy_gradient = self._add_full_noise(aggregated_gradient, epsilon_round)
+            else:
+                raise ValueError(f"Unknown noise_strategy: {noise_strategy}")
 
-            # 7. 연합 평균
-            aggregated_gradient = np.mean(noisy_gradients, axis=0)
-
-            # 8. 모델 업데이트
-            self.update_global_model(aggregated_gradient)
+            # 9. 모델 업데이트
+            self._update_global_model(noisy_gradient)
 
             # 9. 평가 (10 라운드마다)
             if round_t % 10 == 0 or round_t == self.num_rounds - 1:

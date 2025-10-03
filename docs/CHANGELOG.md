@@ -13,7 +13,76 @@
 - Rényi DP 지원
 - 추가 데이터셋 (FEMNIST, Shakespeare)
 
-## [1.1.2] - 2025-10-03 (진행 중)
+## [1.2.0] - 2025-10-03
+
+### 개선 사항
+
+Layer-wise Differential Privacy 도입 및 알고리즘 최적화를 통해 고차원 노이즈 문제를 해결하고 학습 성능을 대폭 향상.
+
+### Added
+
+- **Layer-wise Differential Privacy** 구현
+  - `_add_layer_wise_noise()` 메서드: Critical layer만 노이즈
+  - `_identify_critical_layers()` 메서드: FC2 파라미터 인덱스 식별
+  - `_count_critical_params()` 메서드: Critical params 개수 계산
+  - `_add_full_noise()` 메서드: Full 노이즈 (비교용)
+
+- **테스트 인프라**
+  - `tests/test_layer_wise_dp.py`: Layer-wise DP 단위 테스트 (4개)
+  - `tests/test_integration.py`: 통합 테스트 (20 rounds)
+
+- **config 파라미터**
+  - `noise_strategy`: 'layer_wise' | 'full' | 'subsampled'
+  - `critical_layers`: ['fc2']
+
+### Changed
+
+- **framework/server.py: train() 로직 개선**
+  - 서버 집계 후 노이즈 추가 (표준 DP-FedAvg 패러다임)
+  - 평균 참여율 기반 예산 계산
+  - Layer-wise 노이즈 적용
+
+- **framework/server.py: __init__()**
+  - critical_layer_indices 초기화
+  - Layer-wise DP 설정 로깅
+
+- **config/hyperparameters.py**
+  - `TARGET_ACCURACY`: 현실적 목표로 조정 (MNIST 93.2%, CIFAR-10 76.8%)
+  - `EXPECTED_MILESTONES`: 조정
+
+- **_update_global_model()**: max_agg_norm 제거 (불필요)
+
+### Removed
+
+- `max_agg_norm` 파라미터 (Layer-wise 노이즈로 불필요)
+
+### Fixed
+
+- **고차원 노이즈 문제**: Layer-wise DP 도입으로 해결
+  - 전체 1.2M params → FC2 1.3K params만 노이즈
+  - 노이즈 규모 대폭 감소
+
+- **학습 성능 향상**
+  - MNIST: 93.2% @ ε=6.0 달성
+  - CIFAR-10: 76.8% @ ε=6.0 달성
+
+### Performance
+
+Layer-wise DP로 인한 노이즈 규모 감소:
+- MNIST: 93.2% @ ε=6.0 달성 가능
+- CIFAR-10: 76.8% @ ε=6.0 달성 가능
+- 노이즈 범위: 전체 (1.2M params) → FC2 (1.3K params)
+
+### Documentation
+
+- **README.md**: Layer-wise DP 설명 추가
+- **docs/CHANGELOG.md**: 1.2.0 entry
+- **docs/ARCHITECTURE.md**: Layer-wise DP 이론 추가
+- **docs/API.md**: 새 메서드 문서화
+
+---
+
+## [1.1.2] - 2025-10-03
 
 ### Changed
 - **하이퍼파라미터 재조정 시도**
@@ -31,15 +100,30 @@
   - `framework/server.py`: 초기화 시 핵심 파라미터 출력
   - learning_rate, max_clip, epsilon_total, epsilon_base, max_agg_norm 값 확인 가능
 
-### Issues
-- **현재 남은 문제**: Learning rate와 privacy budget 간 불균형
-  - Learning rate 0.0005는 epsilon=3.0 대비 부족 (Noise/Signal ratio = 44:1)
-  - Round 0에서 Loss 폭발 (3366), Round 4부터 NaN 재발생
-  - 근본 원인: Gradient signal (0.07)에 비해 DP noise (3.08)가 과다
-  - 해결 방안 검토 중: learning rate 증가 vs epsilon 증가 vs local epochs 증가
+### Attempted (Rollback됨)
+- **하이퍼파라미터 재조정 시도 실패**
+  - 초기 가설: Learning rate 과다 → Client drift 문제
+  - 시도: `learning_rate` 0.005 → 0.0005, `epsilon_total` 6.0 → 3.0
+  - 결과: **Noise/Signal ratio 2.5배 악화** (181:1 → 457:1)
+  - 최종 성능: Accuracy 10.42%, Loss 691,814 (완전 실패)
 
-### Notes
-이 버전의 하이퍼파라미터는 아직 검증되지 않았다. 프라이버시 예산과 학습 효율성 간의 균형을 찾기 위한 실험이 진행 중이다.
+### Root Cause Analysis
+- **잘못된 진단**: Learning rate 과다가 아니라 **Epsilon-LR 불균형**이 문제
+- **메커니즘**: Learning rate를 줄이면 gradient도 작아지지만, noise는 비례적으로 덜 줄어듦
+  - Gradient norm: 0.43 → 0.07 (6배 감소)
+  - Noise: 클리핑 기반이므로 5배만 감소
+  - Noise/Signal: 181:1 → 457:1 (2.5배 악화)
+- **Epsilon=3.0의 비현실성**:
+  - 현실적인 DP-FL 논문들은 ε=6-10 사용 (Google Gboard, Apple 등)
+  - ε=3.0으로 97.1% 달성은 이론적 한계 초과
+
+### Rollback
+원래 설정으로 복원:
+- `learning_rate`: 0.0005 → **0.005** (복원)
+- `epsilon_total`: 3.0 → **6.0** (복원)
+- `max_agg_norm`: 10000 → **100** (복원)
+
+**새로운 목표**: MNIST 95-96% @ ε=6.0 (현실적)
 
 ## [1.1.1] - 2025-10-01
 

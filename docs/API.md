@@ -327,9 +327,89 @@ print(f"최종 손실: {history['test_loss'][-1]:.4f}")
   - `test_accuracy`: 테스트 정확도 리스트
   - `test_loss`: 테스트 손실 리스트
   - `clip_values`: 클리핑 값 이력
-  - `noise_levels`: 노이즈 레벨 이력
+  - `noise_levels`: 노이즈 레벨 이력 (라운드별)
   - `participation_stats`: 참여 통계 이력
-  - `privacy_budgets`: 프라이버시 예산 이력
+  - `privacy_budgets`: 프라이버시 예산 이력 (라운드별)
+
+##### `_identify_critical_layers() -> List[Tuple[int, int]]`
+
+Critical layer(마지막 FC)의 파라미터 인덱스 범위 식별.
+
+```python
+# 내부적으로 __init__()에서 호출됨
+indices = server.critical_layer_indices
+print(f"Critical layers: {indices}")
+# 출력: [(1198592, 1199882)]
+```
+
+**반환:**
+- `List[Tuple[int, int]]`: (start_idx, end_idx) 리스트
+
+**이론:**
+- Layer-wise DP를 위해 마지막 classification layer만 노이즈 추가
+- Post-processing Theorem (Dwork & Roth 2014) 기반
+
+##### `_count_critical_params() -> int`
+
+Critical 파라미터 총 개수 계산.
+
+```python
+count = server._count_critical_params()
+print(f"Critical params: {count}")
+# 출력: 1290
+```
+
+**반환:**
+- `int`: Critical 파라미터 개수
+
+##### `_add_layer_wise_noise(gradient: np.ndarray, epsilon: float) -> np.ndarray`
+
+Layer-wise Differential Privacy 노이즈 추가.
+
+```python
+aggregated_gradient = np.mean(clipped_gradients, axis=0)
+noisy_gradient = server._add_layer_wise_noise(aggregated_gradient, epsilon_round)
+```
+
+**파라미터:**
+- `gradient` (np.ndarray): 집계된 gradient (1D array)
+- `epsilon` (float): 프라이버시 예산
+
+**반환:**
+- `np.ndarray`: 노이즈가 추가된 gradient
+
+**특징:**
+- Critical layer (FC2)만 노이즈 추가
+- 노이즈 norm: σ * √d_c (d_c=1290)
+- Full DP 대비 30배 감소
+
+##### `_add_full_noise(gradient: np.ndarray, epsilon: float) -> np.ndarray`
+
+Full DP 노이즈 추가 (비교용).
+
+**경고:** 사용하지 말 것. 고차원에서 노이즈가 신호를 압도함.
+
+```python
+# 비교 실험용
+noisy_full = server._add_full_noise(gradient, epsilon)
+# 노이즈 norm: σ * √d (d=1.2M)
+```
+
+##### `_update_global_model(aggregated_gradient: np.ndarray)`
+
+전역 모델 업데이트.
+
+```python
+server._update_global_model(noisy_gradient)
+```
+
+**파라미터:**
+- `aggregated_gradient` (np.ndarray): 노이즈가 추가된 집계 gradient
+
+**특징:**
+- Layer-wise 노이즈로 gradient norm이 자연스럽게 제한됨
+- max_agg_norm 불필요
+- NaN/Inf 체크만 수행
 
 ##### `evaluate() -> tuple`
 

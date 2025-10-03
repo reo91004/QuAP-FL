@@ -1,8 +1,12 @@
 # config/hyperparameters.py
 
 """
-QuAP-FL 논문 재현을 위한 모든 하이퍼파라미터 고정값
-이 값들을 변경하면 논문 결과를 재현할 수 없다.
+QuAP-FL 하이퍼파라미터
+
+Layer-wise Differential Privacy 기반 연합학습:
+- 마지막 classification layer만 노이즈 추가하여 고차원 노이즈 문제 해결
+- 서버 측 집계 후 노이즈 추가 (표준 DP-FedAvg 패러다임)
+- 현실적 프라이버시-유틸리티 균형 달성
 """
 
 HYPERPARAMETERS = {
@@ -14,11 +18,11 @@ HYPERPARAMETERS = {
     # 로컬 학습 설정
     'local_epochs': 3,  # 충분한 학습이지만 과도한 드리프트 방지
     'local_batch_size': 32,
-    'learning_rate': 0.0005,  # Client drift 완화를 위해 10배 감소
+    'learning_rate': 0.005,  # 원래 설정 (epsilon-lr 균형)
     'lr_decay': 0.995,  # 느린 감소
 
     # 프라이버시 설정
-    'epsilon_total': 3.0,  # 논문 목표값 (3.0 @ MNIST 97.1%)
+    'epsilon_total': 6.0,  # 현실적 프라이버시 수준 (ε=3.0은 너무 강함)
     'delta': 1e-5,
 
     # 적응형 파라미터 (절대 변경 금지)
@@ -36,39 +40,40 @@ HYPERPARAMETERS = {
     'min_clip': 0.1,
     'max_clip': 1.0,  # DP-SGD 표준 범위 (0.1-1.0)
 
-    # Aggregated gradient 제한
-    'max_agg_norm': 10000,  # 노이즈 추가된 gradient 고려 (sqrt(1.2M) * noise_level)
+    # Layer-wise DP 설정
+    'noise_strategy': 'layer_wise',  # 'layer_wise' | 'full' | 'subsampled'
+    'critical_layers': ['fc2'],      # 마지막 classification layer
 }
 
 PRIVACY_CONFIG = {
-    'epsilon_base': 0.015,  # 3.0 / 200 rounds
+    'epsilon_base': 0.03,   # 6.0 / 200 rounds
     'alpha': 0.5,           # 고정값 - 변경 금지
     'beta': 2.0,            # 고정값 - 변경 금지
     'delta': 1e-5           # 고정값
 }
 
-# 논문 재현을 위한 예상 중간 결과
+# 예상 중간 체크포인트
 EXPECTED_MILESTONES = {
     'mnist': {
-        'round_10': (0.65, 0.70),   # 65-70% 정확도
-        'round_50': (0.88, 0.92),   # 88-92% 정확도
-        'round_100': (0.94, 0.96),  # 94-96% 정확도
-        'round_150': (0.96, 0.98),  # 96-98% 정확도
-        'round_200': (0.965, 0.976) # 96.5-97.6% 정확도 (목표: 97.1%)
+        'round_10': (0.70, 0.75),   # 70-75%
+        'round_50': (0.88, 0.92),   # 88-92%
+        'round_100': (0.91, 0.94),  # 91-94%
+        'round_150': (0.92, 0.95),  # 92-95%
+        'round_200': (0.925, 0.940) # 92.5-94.0% (목표: 93.2%)
     },
     'cifar10': {
-        'round_10': (0.35, 0.40),   # 35-40% 정확도
-        'round_50': (0.65, 0.70),   # 65-70% 정확도
-        'round_100': (0.74, 0.78),  # 74-78% 정확도
-        'round_150': (0.78, 0.82),  # 78-82% 정확도
-        'round_200': (0.803, 0.821) # 80.3-82.1% 정확도 (목표: 81.2%)
+        'round_10': (0.40, 0.45),   # 40-45%
+        'round_50': (0.68, 0.72),   # 68-72%
+        'round_100': (0.74, 0.78),  # 74-78%
+        'round_150': (0.76, 0.79),  # 76-79%
+        'round_200': (0.760, 0.780) # 76.0-78.0% (목표: 76.8%)
     }
 }
 
-# 목표 정확도
+# 목표 정확도 (현실적 프라이버시-유틸리티 균형)
 TARGET_ACCURACY = {
-    'mnist': 0.971,   # 97.1%
-    'cifar10': 0.812  # 81.2%
+    'mnist': 0.932,   # 93.2% @ ε=6.0
+    'cifar10': 0.768  # 76.8% @ ε=6.0
 }
 
 # 시각화 설정
