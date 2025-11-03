@@ -35,13 +35,14 @@ HYPERPARAMETERS = {
     'participation_distribution': 'beta',  # Beta(2, 5)
     'participation_alpha': 2,
     'participation_beta': 5,
+    'participation_mix': 0.8,  # 균등 분포와 혼합 비율 (0~1)
 
     # 클리핑 안정성
     'min_clip': 0.1,
     'max_clip': 1.0,  # DP-SGD 표준 범위 (0.1-1.0)
 
     # Layer-wise DP 설정
-    'noise_strategy': 'layer_wise',  # 'layer_wise' | 'full' | 'subsampled'
+    'noise_strategy': 'layer_wise',  # 'layer_wise' | 'full'
     'critical_layers': ['fc2'],      # 마지막 classification layer
 }
 

@@ -1,346 +1,176 @@
 # QuAP-FL: Quantile-based Adaptive Privacy for Federated Learning
 
-클라이언트 참여 패턴 기반 적응형 프라이버시 예산 할당을 통한 연합학습 최적화
+클라이언트 참여 패턴이 불규칙한 현실 환경에서 차분 프라이버시와 모델 성능을 동시에 만족시키기 위한 연합학습 프레임워크입니다. QuAP-FL은 참여 이력을 기반으로 프라이버시 예산을 동적으로 조절하고, 마지막 분류 레이어에만 노이즈를 부여해 고차원 노이즈 문제를 해결합니다.
 
-## 개요
+---
 
-QuAP-FL은 연합학습에서 클라이언트의 불규칙한 참여 패턴을 고려한 적응형 차분 프라이버시 프레임워크다. 핵심 혁신은 클라이언트 참여 이력을 추적하여 **참여 빈도 기반 차등 프라이버시 예산 할당**을 수행하는 것이다.
+## 핵심 아이디어
 
-Layer-wise Differential Privacy를 활용하여 고차원 노이즈 문제를 해결하고, 현실적인 프라이버시-유틸리티 균형을 달성한다.
+- **참여 이력 추적**  
+  `ParticipationTracker`는 각 클라이언트의 참여 횟수를 기록하고 참여율을 계산합니다.
 
-### 주요 특징
+- **적응형 프라이버시 예산**  
+  ```text
+  ε_i(t) = ε_base × (1 + α · exp(-β · p_i(t)))
+  ```
+  자주 참여할수록 강한 프라이버시(작은 ε), 드물게 참여할수록 완화된 프라이버시(큰 ε)를 부여합니다.
 
-- **Layer-wise DP**: 마지막 classification layer만 노이즈 추가 (고차원 문제 해결)
-- **적응형 프라이버시 예산**: 참여율에 반비례하는 동적 예산 할당
-- **분위수 기반 클리핑**: 90th percentile 기반 적응형 그래디언트 클리핑
-- **자동 시각화**: 학습 곡선, 프라이버시 예산, 클리핑 값 등 4-subplot 자동 생성
-- **단순한 구현**: 2,500줄 이하 코드, 학부생 수준에서도 재현 가능
+- **Layer-wise Differential Privacy**  
+  마지막 분류 레이어(critical layer)에만 노이즈를 주입해 유효한 신호를 보존합니다. 클리핑 또한 critical 구간에 한정해 적용합니다.
 
-### 성능 목표
+- **90th Percentile 분위수 클리핑**  
+  매 라운드 그래디언트의 90 분위수 기반으로 클리핑 임계값을 업데이트하고 EMA(momentum=0.95)로 안정화합니다.
 
-| 데이터셋 | 목표 정확도 | 프라이버시 예산 |
-|---------|-----------|---------------|
-| MNIST | 93.2% ± 0.6% | ε = 6.0 |
-| CIFAR-10 | 76.8% ± 1.2% | ε = 6.0 |
+- **혼합형 클라이언트 샘플링**  
+  Beta(2,5) 분포로 생성한 가중치와 균등 분포를 혼합(`participation_mix=0.8`)해 다양한 참여 패턴을 시뮬레이션합니다.
+
+---
+
+## 기본 환경 (config/hyperparameters.py)
+
+| 항목 | 기본값 | 설명 |
+|------|--------|------|
+| `num_clients` | 100 | 총 클라이언트 수 |
+| `num_rounds` | 200 | 연합 라운드 수 |
+| `clients_per_round` | 30 | 라운드당 참여 클라이언트 (30%) |
+| `local_epochs` | 3 | 로컬 학습 에폭 |
+| `local_batch_size` | 32 | 배치 크기 |
+| `learning_rate` | 0.005 | 로컬 학습률 |
+| `lr_decay` | 0.995 | 라운드별 학습률 감쇠 |
+| `epsilon_total` | 6.0 | 전체 프라이버시 예산 |
+| `delta` | 1e-5 | 차분 프라이버시 δ |
+| `clip_quantile` | 0.9 | 분위수 클리핑 |
+| `clip_momentum` | 0.95 | 클리핑 EMA |
+| `noise_strategy` | `layer_wise` | 마지막 레이어에만 노이즈 추가 |
+| `participation_mix` | 0.8 | 가중 샘플링 vs 균등 샘플링 비율 |
+
+---
 
 ## 설치
 
 ```bash
-# 저장소 클론
 git clone https://github.com/your-username/quap-fl.git
 cd quap-fl
-
-# 의존성 설치
 pip install -r requirements.txt
 ```
 
-## 사용법
+---
 
-### 1. 구현 검증
+## 빠른 시작
 
-먼저 구현이 올바른지 검증한다:
+1. **구현 검증**
+   ```bash
+   python main.py --validate_only
+   ```
+   핵심 컴포넌트 단위 테스트(참여율, 예산, 클리핑, 노이즈 계산)를 수행합니다.
 
-```bash
-python main.py --validate_only
-```
+2. **MNIST 학습 예시**
+   ```bash
+   python main.py --dataset mnist --seed 42
+   ```
+   학습 중 주요 로그는 콘솔/파일에 기록되며, 종료 후 `results/`에 JSON·PNG·LOG 파일이 생성됩니다.
 
-예상 출력:
-```
-✓ Test 1: 참여율 계산 통과
-✓ Test 2: 적응형 프라이버시 예산 통과
-✓ Test 3: 분위수 클리핑 통과
-✓ Test 4: 노이즈 계산 통과
+3. **결과 집계**
+   ```bash
+   python aggregate_results.py --dataset mnist
+   ```
+   여러 시드 결과를 `tabulate` 표와 비교 그래프로 요약합니다.
 
-✓ 모든 검증 테스트 통과!
-```
+4. **테스트**
+   ```bash
+   python -m pytest tests/test_tracker.py tests/test_privacy.py tests/test_clipping.py
+   python -m pytest tests/test_layer_wise_dp.py
+   python -m pytest tests/test_integration.py   # 약 6~7분 소요 (MNIST 20라운드)
+   ```
 
-### 2. MNIST 실험
+---
 
-```bash
-# 단일 시드
-python main.py --dataset mnist --seed 42
+## 기록되는 히스토리
 
-# 여러 시드로 실험 (재현성 확인)
-python main.py --dataset mnist --seed 42
-python main.py --dataset mnist --seed 123
-python main.py --dataset mnist --seed 999
+`main.py`는 학습 종료 시 다음 필드를 포함한 JSON을 저장합니다.
 
-# 결과 집계
-python aggregate_results.py --dataset mnist
-```
+- `test_accuracy`, `test_loss`: 평가 라운드별 지표
+- `train_loss`: 라운드 평균 로컬 손실
+- `clip_values`: 분위수 클리핑 값
+- `privacy_budgets`: 라운드별 평균 ε
+- `noise_levels`: 라운드별 노이즈 σ
+- `noise_stats`: 노이즈/신호 노름 통계
+- `participation_stats`: 참여율 평균·표준편차·미참여자 수 등
+- `evaluation_rounds`: 평가 시점 라운드 인덱스
 
-### 3. CIFAR-10 실험
+`utils/visualization.plot_training_history`는 위 정보를 이용해 4분할 그래프(Accuracy, Loss, Cumulative ε, Clip Value)를 렌더링합니다.
 
-```bash
-# 단일 시드
-python main.py --dataset cifar10 --seed 42
-
-# 여러 시드로 실험
-python main.py --dataset cifar10 --seed 42
-python main.py --dataset cifar10 --seed 123
-python main.py --dataset cifar10 --seed 999
-
-# 결과 집계
-python aggregate_results.py --dataset cifar10
-```
-
-### 4. 통합 테스트
-
-```bash
-# 통합 테스트 (20 rounds, 5-10분)
-python tests/test_integration.py
-
-# Layer-wise DP 단위 테스트
-python tests/test_layer_wise_dp.py
-```
-
-### 5. 전체 단위 테스트
-
-```bash
-# 모든 테스트 실행
-python -m pytest tests/
-
-# 개별 테스트
-python tests/test_tracker.py
-python tests/test_privacy.py
-python tests/test_clipping.py
-```
+---
 
 ## 프로젝트 구조
 
 ```
 quap-fl/
-├── framework/              # 핵심 알고리즘
-│   ├── participation_tracker.py    # 참여 이력 추적
-│   ├── adaptive_privacy.py         # 적응형 프라이버시 예산
-│   ├── quantile_clipping.py        # 분위수 클리핑
-│   └── server.py                   # QuAPFLServer 메인 로직
-├── models/                 # 신경망 모델
-│   ├── mnist_model.py             # MNIST CNN
-│   └── cifar_model.py             # CIFAR-10 CNN
-├── data/                  # 데이터 처리
-│   └── data_utils.py              # Non-IID 분할 (Dirichlet α=0.5)
-├── config/                # 설정
-│   └── hyperparameters.py         # 모든 고정값, 시각화 설정
-├── utils/                 # 유틸리티
-│   ├── validation.py              # 검증 테스트
-│   └── visualization.py           # 자동 시각화 및 결과 테이블
-├── tests/                 # 단위 테스트
-│   ├── test_tracker.py
-│   ├── test_privacy.py
+├── aggregate_results.py          # 다중 시드 집계 스크립트
+├── config/
+│   └── hyperparameters.py        # 기본 설정
+├── data/
+│   └── data_utils.py             # Dirichlet 기반 데이터 분할
+├── framework/
+│   ├── adaptive_privacy.py       # 적응형 프라이버시 예산
+│   ├── participation_tracker.py  # 참여 이력 추적
+│   ├── quantile_clipping.py      # 분위수 클리핑
+│   └── server.py                 # QuAPFLServer (학습 루프)
+├── docs/
+│   └── PAPER.md                  # 연구 노트 / 논문 초안
+├── main.py                       # CLI 실행 스크립트
+├── models/
+│   ├── mnist_model.py            # MNIST CNN
+│   └── cifar_model.py            # CIFAR-10 CNN
+├── tests/
 │   ├── test_clipping.py
-│   ├── test_layer_wise_dp.py       # Layer-wise DP 테스트
-│   └── test_integration.py         # 통합 테스트
-├── main.py                        # 메인 실행 스크립트
-├── aggregate_results.py           # 결과 집계
+│   ├── test_integration.py
+│   ├── test_layer_wise_dp.py
+│   ├── test_privacy.py
+│   └── test_tracker.py
+├── utils/
+│   ├── validation.py             # validate_only 진입점
+│   └── visualization.py          # 시각화 & 결과 테이블
 └── requirements.txt
 ```
 
-## 핵심 알고리즘
+---
 
-### 적응형 프라이버시 예산 함수
+## 기대 성능
 
-```
-ε_i(t) = ε_base * (1 + α * exp(-β * p_i(t)))
-```
+통합 테스트(`tests/test_integration.py`)는 CPU 기준 약 6분 내외로 수행되며, 20라운드 만에 다음 조건을 검증합니다.
 
-- `ε_base`: 기본 프라이버시 예산 (ε_total / num_rounds)
-- `α = 0.5`: 적응 강도 (고정값)
-- `β = 2.0`: 감소율 파라미터 (고정값)
-- `p_i(t)`: 클라이언트 i의 참여율
+- 정확도 ≥ 70%
+- 손실 ≤ 1.0
+- critical layer 파라미터 수 = 1,290
 
-### 학습 루프 (9단계)
+풀 스케일 실험(200라운드, ε=6.0)은 아래 수준을 목표로 합니다.
 
-1. 클라이언트 선택
-2. 참여 이력 업데이트 (노이즈 전에!)
-3. 로컬 학습
-4. 클리핑 값 업데이트 (90th percentile)
-5. 클리핑 적용
-6. **서버 측 집계** (노이즈 전!)
-7. **평균 참여율 기반 예산**
-8. **Layer-wise 노이즈 추가** (한 번만!)
-9. 모델 업데이트 및 평가
+| 데이터셋 | 목표 정확도 | 프라이버시 예산 |
+|----------|-------------|------------------|
+| MNIST    | 93.2% ± 0.6% | ε = 6.0 |
+| CIFAR-10 | 76.8% ± 1.2% | ε = 6.0 |
 
-**핵심 특징**: 서버 집계 후 한 번만 노이즈 추가 (표준 DP-FedAvg)
+---
 
-## 하이퍼파라미터 (고정값)
+## 자주 묻는 질문
 
-이 값들을 변경하면 논문 결과를 재현할 수 없다:
+**Q. 하이퍼파라미터를 바꿔도 되나요?**  
+A. 연구 목적이라면 가능합니다. 다만 논문 재현 시에는 기본값을 유지하세요.
 
-```python
-HYPERPARAMETERS = {
-    'num_clients': 100,
-    'num_rounds': 200,
-    'clients_per_round': 30,  # 30% 참여
-    'local_epochs': 5,
-    'local_batch_size': 32,
-    'learning_rate': 0.01,
-    'lr_decay': 0.99,
+**Q. 시각화를 끄고 싶어요.**  
+A. `config.hyperparameters.VISUALIZATION_CONFIG['enabled'] = False`로 설정하면 됩니다.
 
-    'epsilon_total': 3.0,
-    'delta': 1e-5,
+**Q. 학습 도중 로그가 부족해요.**  
+A. 각 라운드마다 평균 train loss, ε, clip 값이 출력되며, 10라운드마다 평가 결과가 기록됩니다. 필요한 경우 `framework/server.py`에서 로깅을 확장하세요.
 
-    'alpha': 0.5,  # 적응 강도 (절대 변경 금지)
-    'beta': 2.0,   # 감소율 (절대 변경 금지)
-    'clip_quantile': 0.9,
-    'clip_momentum': 0.95,
-}
-```
+---
 
-## 중간 체크포인트
+## 라이선스 및 문의
 
-구현이 올바른지 확인하기 위한 중간 정확도 범위:
+- 라이선스: MIT
+- 문의: GitHub Issues 또는 your.email@example.com
 
-### MNIST
+---
 
-| 라운드 | 예상 정확도 범위 |
-|-------|----------------|
-| 10 | 70-75% |
-| 50 | 88-92% |
-| 100 | 91-94% |
-| 200 | 92.5-94.0% |
-
-### CIFAR-10
-
-| 라운드 | 예상 정확도 범위 |
-|-------|----------------|
-| 10 | 40-45% |
-| 50 | 68-72% |
-| 100 | 74-78% |
-| 200 | 76.0-78.0% |
-
-## 예상 출력
-
-```
-============================================================
-QuAP-FL Training Start: MNIST
-Target Accuracy: 0.971
-Clients: 100, Rounds: 200
-============================================================
-
-Training: 100%|████████████████████| 200/200
-
-Round 0: Acc=0.4230, Loss=1.9234, Clip=1.2340
-✓ Round 10: 0.678 (정상 범위: 0.650-0.700)
-Round 20: Acc=0.8120, Loss=0.5432, Clip=0.9870
-...
-Round 190: Acc=0.9690, Loss=0.0987, Clip=0.5430
-Round 200: Acc=0.9710, Loss=0.0921, Clip=0.5210
-✓ Round 200: 0.971 (정상 범위: 0.965-0.976)
-
-목표 성능 달성! Round 200
-
-============================================================
-최종 결과: Accuracy=0.9710, Loss=0.0921
-============================================================
-```
-
-## 시각화
-
-### 자동 생성되는 결과물
-
-실험 실행 후 자동으로 생성되는 파일들:
-
-```
-results/
-├── mnist_seed42_TIMESTAMP.log      # 학습 로그
-├── mnist_seed42_TIMESTAMP.json     # 결과 데이터
-└── mnist_seed42_TIMESTAMP.png      # 4-subplot 시각화
-```
-
-### 4-Subplot 시각화
-
-자동 생성되는 시각화는 다음을 포함한다:
-
-1. **Test Accuracy over Rounds**
-   - 라운드별 정확도 변화
-   - 목표 정확도선 표시
-
-2. **Test Loss over Rounds**
-   - 라운드별 손실 변화 (log scale)
-   - 학습 안정성 확인
-
-3. **Privacy Budget Consumption**
-   - 누적 프라이버시 예산 (ε)
-   - 총 예산선 표시
-
-4. **Adaptive Clipping Values**
-   - 라운드별 클리핑 임계값 변화
-   - 평균 클리핑 값 표시
-
-### 결과 테이블
-
-학습 완료 후 자동으로 출력되는 요약 테이블:
-
-```
-╒═════════════════════════╤═════════════════════╤════════════════════╕
-│ Metric                  │ Value               │ Status             │
-╞═════════════════════════╪═════════════════════╪════════════════════╡
-│ Final Accuracy          │ 0.9710 (97.10%)     │ Achieved           │
-│ Best Accuracy           │ 0.9752 (97.52%)     │ Round 190          │
-│ Final Loss              │ 0.0921              │ -                  │
-│ Total Privacy Budget    │ ε = 3.0             │ -                  │
-│ Average Clipping        │ 0.5210              │ -                  │
-│ Mean Participation Rate │ 0.300               │ 30 clients         │
-╘═════════════════════════╧═════════════════════╧════════════════════╛
-```
-
-### 다중 시드 비교
-
-여러 시드 실험 후 결과 집계 시 비교 시각화도 자동 생성된다:
-
-```bash
-python aggregate_results.py --dataset mnist
-# → results/mnist_multi_seed_comparison.png
-```
-
-비교 시각화는 다음을 포함:
-- Accuracy Mean ± Std 범위
-- Loss 비교 (log scale)
-- Privacy Budget 분포 히스토그램
-- Final Accuracy 분포 히스토그램
-
-### 시각화 비활성화
-
-필요시 `config/hyperparameters.py`에서 비활성화 가능:
-
-```python
-VISUALIZATION_CONFIG = {
-    'enabled': False,  # 시각화 끄기
-    # ...
-}
-```
-
-## 트러블슈팅
-
-### 정확도가 목표에 못 미침
-
-1. 클리핑 값 확인 (0.5 이상이어야 함)
-2. 노이즈 스케일 확인 (너무 크면 학습 안됨)
-3. 학습률 decay 적용 확인
-
-### 수렴이 너무 느림
-
-- 학습률이 너무 작을 수 있음
-- 로컬 에폭 수 확인 (5 에폭)
-- 배치 크기 확인 (32)
-
-## 라이선스
-
-MIT License
-
-## 인용
-
-```bibtex
-@article{quap-fl-2025,
-  title={QuAP-FL: Quantile-based Adaptive Privacy for Federated Learning},
-  author={Your Name},
-  journal={arXiv preprint},
-  year={2025}
-}
-```
-
-## 연락처
-
-- Email: your.email@example.com
-- GitHub Issues: https://github.com/your-username/quap-fl/issues
+QuAP-FL은 “참여율 기반 적응형 프라이버시 + Layer-wise DP”라는 단순하지만 강력한 조합을 실현한 연구용 레퍼런스 구현입니다. 코드 기반 실험이나 후속 연구를 위한 출발점으로 활용해 주세요.

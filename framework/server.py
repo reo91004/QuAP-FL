@@ -103,6 +103,27 @@ class QuAPFLServer:
             initial_clip=1.0
         )
 
+        # 참여 분포 설정 (Beta 등)
+        self.participation_distribution = self.config.get('participation_distribution', 'uniform')
+        self.participation_mix_ratio = float(np.clip(self.config.get('participation_mix', 0.2), 0.0, 1.0))
+        if self.participation_distribution == 'beta':
+            alpha = self.config.get('participation_alpha', 1.0)
+            beta_param = self.config.get('participation_beta', 1.0)
+            base_weights = np.random.beta(alpha, beta_param, self.num_clients)
+            base_weights = np.clip(base_weights, 1e-6, None)
+            uniform_weights = np.ones(self.num_clients) / self.num_clients
+            base_weights = (
+                (1.0 - self.participation_mix_ratio) * base_weights +
+                self.participation_mix_ratio * uniform_weights
+            )
+            # 안전장치: 모든 가중치가 0인 경우 균등 분포 사용
+            if np.allclose(base_weights.sum(), 0.0):
+                base_weights = np.ones(self.num_clients)
+        else:
+            base_weights = np.ones(self.num_clients)
+
+        self.participation_base_weights = base_weights / base_weights.sum()
+
         # 통계 추적
         self.history = {
             'train_loss': [],
@@ -110,8 +131,10 @@ class QuAPFLServer:
             'test_loss': [],
             'clip_values': [],
             'noise_levels': [],
+            'noise_stats': [],
             'participation_stats': [],
-            'privacy_budgets': []
+            'privacy_budgets': [],
+            'evaluation_rounds': []
         }
 
         # 현재 라운드
@@ -199,30 +222,74 @@ class QuAPFLServer:
         if num_selected > self.num_clients:
             num_selected = self.num_clients
 
-        # 참여 패턴 변화 시뮬레이션
+        # 시작 가중치 (Beta 분포 기반 등)
+        weights = self.participation_base_weights.copy()
+
+        # 참여 패턴 변화 시뮬레이션 (짝수 라운드에서 저 ID 선호)
         if round_t % 2 == 0:
-            # 짝수 라운드: 낮은 ID 선호 (이질적 참여 시뮬레이션)
-            weights = np.exp(-np.arange(self.num_clients) * 0.01)
-        else:
-            # 홀수 라운드: 균등
-            weights = np.ones(self.num_clients)
+            weights *= np.exp(-np.arange(self.num_clients) * 0.01)
 
         weights = weights / weights.sum()
 
-        selected_clients = np.random.choice(
-            self.num_clients,
-            size=num_selected,
-            replace=False,
-            p=weights
-        )
+        # 균등 샘플 비율
+        uniform_fraction = self.participation_mix_ratio
+        num_uniform = int(round(num_selected * uniform_fraction))
+        num_uniform = max(0, min(num_uniform, num_selected))
+        num_weighted = num_selected - num_uniform
 
-        return selected_clients.tolist()
+        available_clients = np.arange(self.num_clients)
+        selected_clients = []
+
+        if num_weighted > 0:
+            weighted_probs = weights.copy()
+            if np.sum(weighted_probs) <= 0:
+                weighted_probs = np.ones_like(weighted_probs) / len(weighted_probs)
+            weighted_probs = weighted_probs / weighted_probs.sum()
+            weighted_choices = np.random.choice(
+                available_clients,
+                size=num_weighted,
+                replace=False,
+                p=weighted_probs
+            )
+            selected_clients.extend(weighted_choices.tolist())
+            available_clients = np.setdiff1d(available_clients, weighted_choices, assume_unique=True)
+
+        if num_uniform > 0 and len(available_clients) > 0:
+            uniform_size = min(num_uniform, len(available_clients))
+            uniform_choices = np.random.choice(
+                available_clients,
+                size=uniform_size,
+                replace=False
+            )
+            selected_clients.extend(uniform_choices.tolist())
+
+        # 필요한 수만큼 확보하지 못했으면 남은 클라이언트로 채우기
+        if len(selected_clients) < num_selected:
+            remaining = np.setdiff1d(
+                np.arange(self.num_clients),
+                np.array(selected_clients, dtype=int),
+                assume_unique=False
+            )
+            remaining_size = min(num_selected - len(selected_clients), len(remaining))
+            if remaining_size > 0:
+                fallback_choices = np.random.choice(
+                    remaining,
+                    size=remaining_size,
+                    replace=False
+                )
+                selected_clients.extend(fallback_choices.tolist())
+
+        # 최종 순서를 섞어서 반환
+        selected_array = np.array(selected_clients, dtype=int)
+        np.random.shuffle(selected_array)
+
+        return selected_array.tolist()
 
     def local_training(
         self,
         client_id: int,
         round_t: int
-    ) -> np.ndarray:
+    ) -> tuple:
         """
         클라이언트 로컬 학습
 
@@ -256,6 +323,8 @@ class QuAPFLServer:
         criterion = nn.NLLLoss()
 
         # 로컬 에폭 학습
+        total_loss = 0.0
+        total_samples = 0
         for epoch in range(self.config['local_epochs']):
             for batch_idx, (data, target) in enumerate(dataloader):
                 data, target = data.to(self.device), target.to(self.device)
@@ -265,6 +334,10 @@ class QuAPFLServer:
                 loss = criterion(output, target)
                 loss.backward()
                 optimizer.step()
+
+                batch_size = data.size(0)
+                total_loss += loss.item() * batch_size
+                total_samples += batch_size
 
         # 그래디언트 계산 (전역 모델과의 차이)
         gradient = []
@@ -280,12 +353,15 @@ class QuAPFLServer:
         # Raw gradient로 정규화 (DP-SGD 표준)
         gradient = gradient / lr
 
-        return gradient
+        avg_loss = (total_loss / total_samples) if total_samples > 0 else 0.0
+
+        return gradient, avg_loss
 
     def _add_layer_wise_noise(
         self,
         gradient: np.ndarray,
-        epsilon: float
+        epsilon: float,
+        participant_count: int = 1
     ) -> np.ndarray:
         """
         Layer-wise Differential Privacy 노이즈 추가
@@ -304,7 +380,8 @@ class QuAPFLServer:
 
         # 노이즈 스케일 계산 (Gaussian Mechanism)
         clip_norm = self.clipper.clip_value if self.clipper.clip_value else 1.0
-        sigma = clip_norm * np.sqrt(2 * np.log(1.25 / self.config['delta'])) / epsilon
+        effective_clip = clip_norm / max(1, participant_count)
+        sigma = effective_clip * np.sqrt(2 * np.log(1.25 / self.config['delta'])) / epsilon
 
         # Critical layer에만 노이즈 추가
         total_critical_params = 0
@@ -317,13 +394,20 @@ class QuAPFLServer:
         noise_norm = np.linalg.norm(noise)
         signal_norm = np.linalg.norm(gradient)
 
+        self.history['noise_levels'].append(float(sigma))
+        self.history['noise_stats'].append({
+            'sigma': float(sigma),
+            'noise_norm': float(noise_norm),
+            'signal_norm': float(signal_norm)
+        })
+
         if self.current_round % 10 == 0:
             self._log(f"  [Noise] σ={sigma:.2f}, ||noise||={noise_norm:.2f}, "
                      f"||signal||={signal_norm:.2f}, ratio={noise_norm/signal_norm:.1f}:1")
 
         return gradient + noise
 
-    def _add_full_noise(self, gradient: np.ndarray, epsilon: float) -> np.ndarray:
+    def _add_full_noise(self, gradient: np.ndarray, epsilon: float, participant_count: int = 1) -> np.ndarray:
         """
         Full DP 노이즈 (비교용, 사용하지 말 것)
 
@@ -331,9 +415,20 @@ class QuAPFLServer:
         문제: 고차원에서 노이즈가 신호를 압도함
         """
         clip_norm = self.clipper.clip_value if self.clipper.clip_value else 1.0
-        sigma = clip_norm * np.sqrt(2 * np.log(1.25 / self.config['delta'])) / epsilon
+        effective_clip = clip_norm / max(1, participant_count)
+        sigma = effective_clip * np.sqrt(2 * np.log(1.25 / self.config['delta'])) / epsilon
 
         noise = np.random.normal(0, sigma, gradient.shape)
+        noise_norm = np.linalg.norm(noise)
+        signal_norm = np.linalg.norm(gradient)
+
+        self.history['noise_levels'].append(float(sigma))
+        self.history['noise_stats'].append({
+            'sigma': float(sigma),
+            'noise_norm': float(noise_norm),
+            'signal_norm': float(signal_norm)
+        })
+
         return gradient + noise
 
     def _update_global_model(self, aggregated_gradient: np.ndarray):
@@ -444,7 +539,8 @@ class QuAPFLServer:
         initial_acc, initial_loss = self.evaluate()
         self._log(f"\nInitial model: Acc={initial_acc:.4f}, Loss={initial_loss:.4f}")
 
-        for round_t in tqdm(range(self.num_rounds), desc="Training"):
+        progress_bar = tqdm(range(self.num_rounds), desc="Training")
+        for round_t in progress_bar:
             self.current_round = round_t
 
             # 1. 클라이언트 선택
@@ -455,16 +551,37 @@ class QuAPFLServer:
 
             # 3. 로컬 학습 및 그래디언트 수집
             local_gradients = []
+            local_losses = []
             for client_id in selected_clients:
-                gradient = self.local_training(client_id, round_t)
+                gradient, client_loss = self.local_training(client_id, round_t)
                 local_gradients.append(gradient)
+                local_losses.append(client_loss)
 
-            # 4. 클리핑 값 업데이트 (90th percentile)
-            current_clip = self.clipper.update_clip_value(local_gradients)
+            mean_train_loss = float(np.mean(local_losses)) if local_losses else 0.0
+            self.history['train_loss'].append(mean_train_loss)
+
+            # 4. Critical layer 기반 클리핑 값 업데이트 (90th percentile)
+            critical_gradients = [
+                np.concatenate([
+                    grad[start:end]
+                    for start, end in self.critical_layer_indices
+                ])
+                for grad in local_gradients
+            ]
+            current_clip = self.clipper.update_clip_value(critical_gradients)
             self.history['clip_values'].append(current_clip)
 
-            # 5. 클리핑 적용
-            clipped_gradients = self.clipper.clip_gradients(local_gradients)
+            # 5. Critical segment 클리핑 적용
+            clipped_critical = self.clipper.clip_gradients(critical_gradients)
+            clipped_gradients = []
+            for grad, clipped_seg in zip(local_gradients, clipped_critical):
+                grad_copy = grad.copy()
+                offset = 0
+                for start, end in self.critical_layer_indices:
+                    seg_len = end - start
+                    grad_copy[start:end] = clipped_seg[offset:offset + seg_len]
+                    offset += seg_len
+                clipped_gradients.append(grad_copy)
 
             # 6. 서버 측 집계 (노이즈 전!)
             aggregated_gradient = np.mean(clipped_gradients, axis=0)
@@ -484,9 +601,17 @@ class QuAPFLServer:
             noise_strategy = self.config.get('noise_strategy', 'layer_wise')
 
             if noise_strategy == 'layer_wise':
-                noisy_gradient = self._add_layer_wise_noise(aggregated_gradient, epsilon_round)
+                noisy_gradient = self._add_layer_wise_noise(
+                    aggregated_gradient,
+                    epsilon_round,
+                    participant_count=len(selected_clients)
+                )
             elif noise_strategy == 'full':
-                noisy_gradient = self._add_full_noise(aggregated_gradient, epsilon_round)
+                noisy_gradient = self._add_full_noise(
+                    aggregated_gradient,
+                    epsilon_round,
+                    participant_count=len(selected_clients)
+                )
             else:
                 raise ValueError(f"Unknown noise_strategy: {noise_strategy}")
 
@@ -497,11 +622,22 @@ class QuAPFLServer:
             # 10. 모델 업데이트
             self._update_global_model(scaled_gradient)
 
+            # 진행 상황 로그
+            progress_msg = (
+                f"[Round {round_t}] train_loss={mean_train_loss:.4f}, "
+                f"ε={epsilon_round:.4f}, clip={current_clip:.4f}"
+            )
+            if self.logger:
+                self.logger.info(progress_msg)
+            else:
+                progress_bar.write(progress_msg)
+
             # 9. 평가 (10 라운드마다)
             if round_t % 10 == 0 or round_t == self.num_rounds - 1:
                 accuracy, loss = self.evaluate()
                 self.history['test_accuracy'].append(accuracy)
                 self.history['test_loss'].append(loss)
+                self.history['evaluation_rounds'].append(round_t)
 
                 # 통계 기록
                 stats = self.tracker.get_statistics()
@@ -510,7 +646,7 @@ class QuAPFLServer:
                 # 중간 체크포인트 검증
                 check_milestone(self.dataset_name, round_t, accuracy, logger=self.logger)
 
-                self._log(f"\nRound {round_t}: Acc={accuracy:.4f}, Loss={loss:.4f}, "
+                self._log(f"Round {round_t}: Acc={accuracy:.4f}, Loss={loss:.4f}, "
                           f"Clip={current_clip:.4f}")
 
                 # 조기 종료 체크
@@ -520,8 +656,26 @@ class QuAPFLServer:
 
         # 최종 평가
         final_accuracy, final_loss = self.evaluate()
+
+        if self.history['test_accuracy']:
+            self.history['test_accuracy'][-1] = final_accuracy
+        else:
+            self.history['test_accuracy'].append(final_accuracy)
+
+        if self.history['test_loss']:
+            self.history['test_loss'][-1] = final_loss
+        else:
+            self.history['test_loss'].append(final_loss)
+
+        if self.history['evaluation_rounds']:
+            self.history['evaluation_rounds'][-1] = self.current_round
+        else:
+            self.history['evaluation_rounds'].append(self.current_round)
+
         self._log("\n" + "=" * 60)
         self._log(f"최종 결과: Accuracy={final_accuracy:.4f}, Loss={final_loss:.4f}")
         self._log("=" * 60)
+
+        progress_bar.close()
 
         return self.history

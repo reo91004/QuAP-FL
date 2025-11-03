@@ -43,9 +43,13 @@ def plot_training_history(
     # Figure 생성
     fig, axes = plt.subplots(2, 2, figsize=config.get('figsize', (12, 10)))
 
-    # 라운드 인덱스 (10 라운드마다 평가)
-    eval_interval = 10
-    rounds = [i * eval_interval for i in range(len(history.get('test_accuracy', [])))]
+    # 평가 라운드 (history에 존재하면 사용, 없으면 10라운드 간격 가정)
+    evaluation_rounds = history.get('evaluation_rounds', [])
+    if evaluation_rounds:
+        rounds = evaluation_rounds
+    else:
+        eval_interval = 10
+        rounds = [i * eval_interval for i in range(len(history.get('test_accuracy', [])))]
 
     # 1. Test Accuracy
     ax = axes[0, 0]
@@ -79,17 +83,14 @@ def plot_training_history(
     if 'privacy_budgets' in history and len(history['privacy_budgets']) > 0:
         # 누적 프라이버시 예산 계산
         cumulative_epsilon = np.cumsum(history['privacy_budgets'])
-        # 평가 시점에 맞춰 샘플링 (각 평가 시점의 마지막 값)
-        privacy_at_eval = []
-        clients_per_round = 30  # 기본값
-        for i in range(len(rounds)):
-            round_idx = rounds[i]
-            # 해당 라운드까지의 총 소비량
-            end_idx = min(round_idx * clients_per_round, len(cumulative_epsilon))
-            if end_idx > 0:
-                privacy_at_eval.append(cumulative_epsilon[end_idx - 1])
-            else:
-                privacy_at_eval.append(0.0)
+        if rounds:
+            privacy_at_eval = [
+                float(cumulative_epsilon[min(round_idx, len(cumulative_epsilon) - 1)])
+                for round_idx in rounds
+            ]
+        else:
+            privacy_at_eval = cumulative_epsilon.tolist()
+            rounds = list(range(len(privacy_at_eval)))
 
         ax.plot(rounds, privacy_at_eval, marker='^', linewidth=2,
                markersize=6, color='green')
@@ -109,8 +110,18 @@ def plot_training_history(
     ax = axes[1, 1]
     if 'clip_values' in history and len(history['clip_values']) > 0:
         # clip_values는 모든 라운드에 대해 기록되므로 샘플링 필요
-        clip_at_eval = [history['clip_values'][r] for r in rounds if r < len(history['clip_values'])]
-        rounds_clip = rounds[:len(clip_at_eval)]
+        if rounds:
+            clip_at_eval = [
+                history['clip_values'][round_idx]
+                for round_idx in rounds
+                if round_idx < len(history['clip_values'])
+            ]
+            rounds_clip = [
+                round_idx for round_idx in rounds if round_idx < len(history['clip_values'])
+            ]
+        else:
+            clip_at_eval = history['clip_values']
+            rounds_clip = list(range(len(clip_at_eval)))
 
         ax.plot(rounds_clip, clip_at_eval, marker='D', linewidth=2,
                markersize=6, color='purple')

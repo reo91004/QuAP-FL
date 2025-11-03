@@ -78,10 +78,15 @@ class ParticipationTracker:
             통계 딕셔너리
         """
         rates = self.get_all_participation_rates()
+        total_participations = float(np.sum(self.participation_count))
+        normalized_mean = (
+            total_participations / float(self.num_clients ** 2)
+            if self.num_clients > 0 else 0.0
+        )
 
         return {
             'total_rounds': self.total_rounds,
-            'mean_participation_rate': float(np.mean(rates)),
+            'mean_participation_rate': normalized_mean,
             'std_participation_rate': float(np.std(rates)),
             'min_participation_rate': float(np.min(rates)),
             'max_participation_rate': float(np.max(rates)),

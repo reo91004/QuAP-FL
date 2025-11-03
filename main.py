@@ -240,9 +240,12 @@ def main():
             'test_accuracy': [float(x) for x in history.get('test_accuracy', [])],
             'test_loss': [float(x) for x in history.get('test_loss', [])],
             'clip_values': [float(x) for x in history.get('clip_values', [])],
+            'train_loss': [float(x) for x in history.get('train_loss', [])],
             'noise_levels': [float(x) for x in history.get('noise_levels', [])],
+            'noise_stats': history.get('noise_stats', []),
             'privacy_budgets': [float(x) for x in history.get('privacy_budgets', [])],
-            'participation_stats': history.get('participation_stats', [])
+            'participation_stats': history.get('participation_stats', []),
+            'evaluation_rounds': history.get('evaluation_rounds', [])
         }
     }
 
