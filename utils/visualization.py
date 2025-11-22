@@ -202,7 +202,13 @@ def plot_multi_seed_comparison(
             acc = result['test_accuracy']
             all_accuracies.append(acc)
             max_len = max(max_len, len(acc))
-            rounds = [j * eval_interval for j in range(len(acc))]
+            
+            # Use evaluation_rounds if available, otherwise generate
+            if 'evaluation_rounds' in result and len(result['evaluation_rounds']) == len(acc):
+                rounds = result['evaluation_rounds']
+            else:
+                rounds = [j * eval_interval for j in range(len(acc))]
+                
             ax.plot(rounds, acc, alpha=0.3, linewidth=1)
 
     # Mean ± Std 계산
@@ -216,7 +222,10 @@ def plot_multi_seed_comparison(
         padded = np.array(padded)
         mean_acc = np.mean(padded, axis=0)
         std_acc = np.std(padded, axis=0)
-        rounds = [i * eval_interval for i in range(max_len)]
+        
+        # Generate rounds for the mean plot
+        # Use 0 to (max_len-1)*interval
+        rounds = [i * eval_interval for i in range(len(mean_acc))]
 
         ax.plot(rounds, mean_acc, linewidth=3, color='blue', label='Mean')
         ax.fill_between(rounds, mean_acc - std_acc, mean_acc + std_acc,
@@ -236,7 +245,12 @@ def plot_multi_seed_comparison(
         if 'test_loss' in result:
             loss = result['test_loss']
             all_losses.append(loss)
-            rounds = [j * eval_interval for j in range(len(loss))]
+            
+            if 'evaluation_rounds' in result and len(result['evaluation_rounds']) == len(loss):
+                rounds = result['evaluation_rounds']
+            else:
+                rounds = [j * eval_interval for j in range(len(loss))]
+                
             ax.semilogy(rounds, loss, alpha=0.3, linewidth=1)
 
     if len(all_losses) > 0:
@@ -247,6 +261,8 @@ def plot_multi_seed_comparison(
 
         padded = np.array(padded)
         mean_loss = np.mean(padded, axis=0)
+        
+        rounds = [i * eval_interval for i in range(len(mean_loss))]
 
         ax.semilogy(rounds, mean_loss, linewidth=3, color='orange', label='Mean')
 

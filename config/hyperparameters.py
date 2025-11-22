@@ -14,6 +14,7 @@ HYPERPARAMETERS = {
     'num_clients': 100,
     'num_rounds': 200,
     'clients_per_round': 30,  # 30% 참여율
+    'warmup_rounds': 5,       # 초기 참여율 안정화를 위한 웜업 라운드
 
     # 로컬 학습 설정
     'local_epochs': 3,  # 충분한 학습이지만 과도한 드리프트 방지

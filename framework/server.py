@@ -100,7 +100,7 @@ class QuAPFLServer:
             momentum=self.config['clip_momentum'],
             min_clip=self.config['min_clip'],
             max_clip=self.config['max_clip'],
-            initial_clip=1.0
+            initial_clip=self.config.get('initial_clip', 1.0)
         )
 
         # 참여 분포 설정 (Beta 등)
@@ -547,7 +547,13 @@ class QuAPFLServer:
             selected_clients = self.select_clients(round_t)
 
             # 2. 참여 이력 업데이트 (노이즈 추가 전에!)
-            self.tracker.update(selected_clients)
+            # Warm-up 기간에는 추적을 건너뛰거나 업데이트만 하고 예산 계산에는 쓰지 않음
+            # 여기서는 안정성을 위해 업데이트는 하되, 예산 계산 시 warm-up 여부를 체크함
+            if round_t >= self.config.get('warmup_rounds', 0):
+                self.tracker.update(selected_clients)
+            else:
+                # Warm-up 기간에는 로깅만
+                pass
 
             # 3. 로컬 학습 및 그래디언트 수집
             local_gradients = []
@@ -568,7 +574,16 @@ class QuAPFLServer:
                 ])
                 for grad in local_gradients
             ]
-            current_clip = self.clipper.update_clip_value(critical_gradients)
+            
+            # Clipping Strategy 확인
+            clipping_strategy = self.config.get('clipping_strategy', 'quantile')
+            
+            if clipping_strategy == 'quantile':
+                current_clip = self.clipper.update_clip_value(critical_gradients)
+            else:
+                # Fixed clipping (update하지 않음)
+                current_clip = self.clipper.clip_value if self.clipper.clip_value else 1.0
+                
             self.history['clip_values'].append(current_clip)
 
             # 5. Critical segment 클리핑 적용
@@ -587,12 +602,18 @@ class QuAPFLServer:
             aggregated_gradient = np.mean(clipped_gradients, axis=0)
 
             # 7. 평균 참여율 기반 프라이버시 예산 계산
-            participation_rates = [
-                self.tracker.get_participation_rate(cid)
-                for cid in selected_clients
-            ]
-            avg_participation = np.mean(participation_rates)
-            epsilon_round = self.privacy_allocator.compute_privacy_budget(avg_participation)
+            if round_t < self.config.get('warmup_rounds', 0):
+                # Warm-up: 고정 예산 (안정성 확보)
+                epsilon_round = self.privacy_allocator.epsilon_base
+                if self.logger:
+                    self.logger.info(f"  [Warm-up] Using fixed epsilon: {epsilon_round:.6f}")
+            else:
+                participation_rates = [
+                    self.tracker.get_participation_rate(cid)
+                    for cid in selected_clients
+                ]
+                avg_participation = np.mean(participation_rates)
+                epsilon_round = self.privacy_allocator.compute_privacy_budget(avg_participation)
 
             # 통계 기록
             self.history['privacy_budgets'].append(epsilon_round)
@@ -612,6 +633,9 @@ class QuAPFLServer:
                     epsilon_round,
                     participant_count=len(selected_clients)
                 )
+            elif noise_strategy == 'none':
+                # FedAvg (No Privacy)
+                noisy_gradient = aggregated_gradient
             else:
                 raise ValueError(f"Unknown noise_strategy: {noise_strategy}")
 

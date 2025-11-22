@@ -30,18 +30,32 @@ def aggregate_results(dataset: str, result_dir: str = './results', seeds: list =
     """
     if seeds is None:
         # 결과 파일 자동 탐지 (JSON 형식)
-        pattern = f'{dataset}_seed*.json'
-        result_files = list(Path(result_dir).glob(pattern))
+        # 1. Check if result_dir is a timestamped folder or root
+        if os.path.basename(result_dir).isdigit() and '_' in os.path.basename(result_dir):
+             # It's likely a timestamped folder
+             search_dir = result_dir
+        else:
+             # It's likely root, try to find latest timestamped folder
+             subdirs = [d for d in Path(result_dir).iterdir() if d.is_dir() and d.name[0].isdigit()]
+             if subdirs:
+                 latest_subdir = sorted(subdirs, key=lambda x: x.name)[-1]
+                 print(f"Auto-detected latest session: {latest_subdir}")
+                 search_dir = str(latest_subdir)
+             else:
+                 search_dir = result_dir
+
+        pattern = f'{dataset}_*.json'
+        result_files = list(Path(search_dir).glob(pattern))
 
         if len(result_files) == 0:
-            print(f"No result files found for {dataset} in {result_dir}")
-            print("Expected format: {dataset}_seed{number}_{timestamp}.json")
+            print(f"No result files found for {dataset} in {search_dir}")
             return
 
         seeds = []
         for f in result_files:
             # 파일명에서 시드 추출
-            name = f.stem  # 파일명 (확장자 제외)
+            # format: {dataset}_{mode}_seed{seed}_{timestamp}.json
+            name = f.stem
             parts = name.split('_')
             for part in parts:
                 if part.startswith('seed'):
@@ -51,8 +65,9 @@ def aggregate_results(dataset: str, result_dir: str = './results', seeds: list =
                             seeds.append(seed)
                     except ValueError:
                         continue
-
+        
         seeds = sorted(seeds)
+        result_dir = search_dir # Update result_dir for later use
 
     print("=" * 60)
     print(f"결과 집계: {dataset.upper()}")
@@ -65,28 +80,25 @@ def aggregate_results(dataset: str, result_dir: str = './results', seeds: list =
     all_histories = []
 
     for seed in seeds:
-        # 해당 시드의 가장 최근 파일 찾기
-        pattern = f'{dataset}_seed{seed}_*.json'
+        # 해당 시드의 모든 결과 파일 수집 (모드별, 타임스탬프별)
+        pattern = f'{dataset}_*_seed{seed}_*.json'
         matching_files = list(Path(result_dir).glob(pattern))
 
         if len(matching_files) == 0:
             print(f"Warning: No results found for seed {seed}, skipping...")
             continue
 
-        # 가장 최근 파일 선택 (타임스탬프 기준)
-        latest_file = sorted(matching_files, key=lambda x: x.stem.split('_')[-1])[-1]
-
-        with open(latest_file, 'r', encoding='utf-8') as f:
-            data = json.load(f)
-
-        # history 추출
-        if 'history' in data:
-            history = data['history']
-            all_results.append(data)
-            all_histories.append(history)
-        else:
-            print(f"Warning: {latest_file} has no history, skipping...")
-            continue
+        # 모든 파일 로드
+        for file_path in matching_files:
+            try:
+                with open(file_path, 'r', encoding='utf-8') as f:
+                    data = json.load(f)
+                
+                if 'history' in data:
+                    all_results.append(data)
+                    all_histories.append(data['history'])
+            except Exception as e:
+                print(f"Error loading {file_path}: {e}")
 
     if len(all_results) == 0:
         print("No valid results found")
@@ -94,53 +106,74 @@ def aggregate_results(dataset: str, result_dir: str = './results', seeds: list =
 
     print(f"유효한 결과: {len(all_histories)}개")
 
-    # 최종 정확도 수집
-    final_accuracies = []
-    final_losses = []
-
-    for history in all_histories:
+    # 모드별로 결과 분류
+    results_by_mode = {}
+    
+    for data in all_results:
+        # 파일명에서 모드 추출 (예: mnist_fedavg_seed42_...)
+        # 메타데이터에 모드 정보가 없으면 파일명 추론
+        mode = 'unknown'
+        if 'hyperparameters' in data['metadata']:
+            if data['metadata']['hyperparameters'].get('noise_strategy') == 'none':
+                mode = 'FedAvg'
+            elif data['metadata']['hyperparameters'].get('alpha') == 0.0:
+                mode = 'Fixed-DP'
+            else:
+                mode = 'QuAP-FL'
+        
+        if mode not in results_by_mode:
+            results_by_mode[mode] = {'accuracies': [], 'losses': [], 'histories': []}
+            
+        history = data['history']
         if 'test_accuracy' in history and len(history['test_accuracy']) > 0:
-            final_accuracies.append(history['test_accuracy'][-1])
+            results_by_mode[mode]['accuracies'].append(history['test_accuracy'][-1])
+            results_by_mode[mode]['histories'].append(history)
         if 'test_loss' in history and len(history['test_loss']) > 0:
-            final_losses.append(history['test_loss'][-1])
+            results_by_mode[mode]['losses'].append(history['test_loss'][-1])
 
-    # 통계 계산
-    print("\n" + "=" * 60)
-    print("최종 결과 통계")
-    print("=" * 60)
+    # 통계 계산 및 출력
+    print("\n" + "=" * 80)
+    print(f"실험 결과 요약 ({dataset.upper()})")
+    print("=" * 80)
 
+    headers = ["Mode", "Exp Count", "Final Acc (Mean)", "Final Acc (Max)", "Final Loss", "Target Reached"]
     table_data = []
 
-    if len(final_accuracies) > 0:
-        mean_acc = np.mean(final_accuracies)
-        std_acc = np.std(final_accuracies)
-        min_acc = np.min(final_accuracies)
-        max_acc = np.max(final_accuracies)
+    target = TARGET_ACCURACY.get(dataset, 0.0)
 
-        table_data.append(["Final Accuracy (Mean)", f"{mean_acc:.4f} ({mean_acc*100:.2f}%)"])
-        table_data.append(["Final Accuracy (Std)", f"{std_acc:.4f}"])
-        table_data.append(["Final Accuracy (Min)", f"{min_acc:.4f} ({min_acc*100:.2f}%)"])
-        table_data.append(["Final Accuracy (Max)", f"{max_acc:.4f} ({max_acc*100:.2f}%)"])
-        table_data.append(["95% CI", f"[{mean_acc - 1.96*std_acc:.4f}, {mean_acc + 1.96*std_acc:.4f}]"])
+    for mode, stats in results_by_mode.items():
+        accs = stats['accuracies']
+        losses = stats['losses']
+        
+        if not accs:
+            continue
+            
+        mean_acc = np.mean(accs)
+        max_acc = np.max(accs)
+        mean_loss = np.mean(losses)
+        success_count = sum(a >= target for a in accs)
+        success_rate = f"{success_count}/{len(accs)}"
+        
+        table_data.append([
+            mode,
+            len(accs),
+            f"{mean_acc:.4f} ({mean_acc*100:.2f}%)",
+            f"{max_acc:.4f}",
+            f"{mean_loss:.4f}",
+            success_rate
+        ])
 
-    if len(final_losses) > 0:
-        mean_loss = np.mean(final_losses)
-        std_loss = np.std(final_losses)
+    print(tabulate(table_data, headers=headers, tablefmt="fancy_grid"))
+    print()
 
-        table_data.append(["Final Loss (Mean)", f"{mean_loss:.4f}"])
-        table_data.append(["Final Loss (Std)", f"{std_loss:.4f}"])
-
-    # 목표 달성 여부
-    if dataset in TARGET_ACCURACY and len(final_accuracies) > 0:
-        target = TARGET_ACCURACY[dataset]
-        success_count = sum(acc >= target for acc in final_accuracies)
-        success_rate = success_count / len(final_accuracies)
-
-        table_data.append(["Target Accuracy", f"{target:.3f} ({target*100:.1f}%)"])
-        table_data.append(["Achievement Rate", f"{success_rate:.1%} ({success_count}/{len(final_accuracies)})"])
-
-    # 테이블 출력
-    print("\n" + tabulate(table_data, headers=["Metric", "Value"], tablefmt="fancy_grid"))
+    # 상세 통계 (QuAP-FL 기준)
+    if 'QuAP-FL' in results_by_mode:
+        print("QuAP-FL 상세 분석:")
+        accs = results_by_mode['QuAP-FL']['accuracies']
+        mean_acc = np.mean(accs)
+        std_acc = np.std(accs)
+        print(f"  Mean: {mean_acc:.4f} ± {std_acc:.4f}")
+        print(f"  95% CI: [{mean_acc - 1.96*std_acc:.4f}, {mean_acc + 1.96*std_acc:.4f}]")
     print()
 
     # 수렴 속도 분석

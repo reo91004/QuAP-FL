@@ -15,9 +15,6 @@ from typing import Optional
 # 상위 디렉토리 import를 위한 경로 추가
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
-from framework.participation_tracker import ParticipationTracker
-from framework.adaptive_privacy import AdaptivePrivacyAllocator
-from framework.quantile_clipping import QuantileClipper
 from config.hyperparameters import EXPECTED_MILESTONES
 
 
@@ -29,6 +26,11 @@ def validate_implementation() -> bool:
     Returns:
         True if all tests passed, False otherwise
     """
+    # Circular import 방지를 위해 함수 내부에서 import
+    from framework.participation_tracker import ParticipationTracker
+    from framework.adaptive_privacy import AdaptivePrivacyAllocator
+    from framework.quantile_clipping import QuantileClipper
+
     tests_passed = []
     tests_failed = []
 

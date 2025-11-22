@@ -89,6 +89,8 @@ def main():
     parser = argparse.ArgumentParser(description='QuAP-FL: Quantile-based Adaptive Privacy FL')
     parser.add_argument('--dataset', type=str, choices=['mnist', 'cifar10'],
                         help='Dataset to use')
+    parser.add_argument('--mode', type=str, default='quap_fl', choices=['quap_fl', 'fixed_dp', 'fedavg'],
+                        help='Experiment mode: quap_fl (Ours), fixed_dp (Baseline), fedavg (No Privacy)')
     parser.add_argument('--seed', type=int, default=42,
                         help='Random seed for reproducibility')
     parser.add_argument('--gpu', type=int, default=0,
@@ -139,17 +141,42 @@ def main():
     if args.num_rounds is not None:
         config['num_rounds'] = args.num_rounds
 
-    # 출력 디렉토리 생성 (config 우선)
-    output_dir = OUTPUT_CONFIG.get('output_dir', args.output_dir)
+
+
+    # 출력 디렉토리 생성 (args 우선)
+    if args.output_dir != './results':
+        output_dir = args.output_dir
+    else:
+        output_dir = OUTPUT_CONFIG.get('output_dir', args.output_dir)
+        
     os.makedirs(output_dir, exist_ok=True)
 
     # 타임스탬프 생성
     timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
 
     # 로깅 설정
-    log_path = os.path.join(output_dir, f'{args.dataset}_seed{args.seed}_{timestamp}.log')
+    log_path = os.path.join(output_dir, f'{args.dataset}_{args.mode}_seed{args.seed}_{timestamp}.log')
     logger = setup_logging(log_path)
     logger.info(f"로그 파일 생성: {log_path}")
+
+    # 모드별 설정 적용
+    if args.mode == 'fedavg':
+        config['noise_strategy'] = 'none'
+        config['clipping_strategy'] = 'fixed'
+        # FedAvg는 클리핑도 사실상 안하거나 매우 크게 함, 여기서는 10.0으로 고정하여 효과 최소화
+        config['initial_clip'] = 10.0 
+        logger.info("Mode: FedAvg (No Privacy)")
+        
+    elif args.mode == 'fixed_dp':
+        config['alpha'] = 0.0  # 적응형 예산 비활성화 (고정 예산)
+        config['clipping_strategy'] = 'fixed'
+        config['initial_clip'] = 1.0  # 표준 DP-SGD 클리핑 값
+        logger.info("Mode: Fixed-DP (Standard DP-FedAvg)")
+        
+    else: # quap_fl
+        config['alpha'] = 0.5
+        config['clipping_strategy'] = 'quantile'
+        logger.info("Mode: QuAP-FL (Ours)")
 
     # 데이터 준비
     logger.info(f"데이터셋 준비: {args.dataset.upper()}")
@@ -251,7 +278,7 @@ def main():
 
     result_path = os.path.join(
         output_dir,
-        f'{args.dataset}_seed{args.seed}_{timestamp}.json'
+        f'{args.dataset}_{args.mode}_seed{args.seed}_{timestamp}.json'
     )
 
     with open(result_path, 'w', encoding='utf-8') as f:
@@ -285,7 +312,7 @@ def main():
                 config=VISUALIZATION_CONFIG,
                 save_path=os.path.join(
                     output_dir,
-                    f'{args.dataset}_seed{args.seed}_{timestamp}.{VISUALIZATION_CONFIG.get("format", "png")}'
+                    f'{args.dataset}_{args.mode}_seed{args.seed}_{timestamp}.{VISUALIZATION_CONFIG.get("format", "png")}'
                 )
             )
             logger.info(f"시각화 저장: {plot_path}")

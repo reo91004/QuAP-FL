@@ -150,6 +150,11 @@ class AdaptivePrivacyAllocator:
         클라이언트 i가 T 라운드 중 k_i번 참여할 때,
         ε_total,i = Σ ε_i(t) ≤ k_i * ε_base * (1 + α)
 
+        Note:
+            이 계산은 Basic Composition Theorem을 기반으로 한 상한(Upper Bound)입니다.
+            Advanced Composition이나 Moments Accountant를 사용하면 더 타이트한 bound를 얻을 수 있으나,
+            본 연구에서는 보수적인(Conservative) 안전성을 위해 Basic Composition을 채택했습니다.
+
         Args:
             participation_rates: 각 클라이언트의 참여율 (shape: num_clients)
             num_participations: 각 클라이언트의 참여 횟수 (shape: num_clients)
@@ -196,3 +201,9 @@ class AdaptivePrivacyAllocator:
             'theoretical_upper_bound': float(np.max(upper_bound)),
             'privacy_efficiency': float(np.mean(cumulative_loss) / np.mean(upper_bound)) if np.mean(upper_bound) > 0 else 0.0
         }
+
+    def get_accounting_method(self) -> str:
+        """
+        사용된 프라이버시 계산 방식 반환
+        """
+        return "Basic Composition (Conservative Upper Bound)"
