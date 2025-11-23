@@ -1,0 +1,83 @@
+graph TD
+    %% Style Definitions
+    classDef client fill:#e1f5fe,stroke:#01579b,stroke-width:2px;
+    classDef server fill:#fff3e0,stroke:#e65100,stroke-width:2px;
+    classDef module fill:#f3e5f5,stroke:#4a148c,stroke-width:2px,stroke-dasharray: 5 5;
+    classDef data fill:#e8f5e9,stroke:#1b5e20,stroke-width:1px;
+
+    subgraph Clients ["(a) Client Selection & Local Training"]
+        direction TB
+        C1[Client 1]:::client
+        C2[Client 2]:::client
+        C3[Client 3]:::client
+        
+        D1[("Local Data 1")]:::data
+        D2[("Local Data 2")]:::data
+        D3[("Local Data 3")]:::data
+        
+        D1 --> C1
+        D2 --> C2
+        D3 --> C3
+        
+        C1 -- "Gradient g1" --> Server
+        C2 -- "Gradient g2" --> Server
+        C3 -- "Gradient g3" --> Server
+    end
+
+    subgraph Server ["QuAP-FL Server"]
+        direction TB
+        
+        subgraph Tracker ["(c) Participation Tracker"]
+            PT[Participation History]:::module
+            CalcRate["Calculate Participation Rate p_i"]:::module
+            AdaptiveBudget["Adaptive Budget ε_i(t)"]:::module
+            
+            PT --> CalcRate
+            CalcRate --> AdaptiveBudget
+        end
+        
+        subgraph Clipper ["(b) Adaptive Clipping"]
+            Norms["Calculate Norms ||g_i||"]:::module
+            Quantile["Calculate 90th Percentile"]:::module
+            UpdateClip["Update Clip Threshold C_t"]:::module
+            
+            Norms --> Quantile
+            Quantile --> UpdateClip
+        end
+        
+        subgraph Aggregation ["(c) Aggregation & Noise"]
+            ClipApply["Clip Gradients"]:::module
+            Avg["Aggregate (Mean)"]:::module
+            LayerNoise["Layer-wise Noise Injection"]:::module
+            
+            ClipApply --> Avg
+            Avg --> LayerNoise
+        end
+        
+        GlobalModel[("Global Model θ")]:::server
+    end
+
+    %% Connections
+    C1 -.-> PT
+    C2 -.-> PT
+    C3 -.-> PT
+    
+    AdaptiveBudget -- "ε_i" --> LayerNoise
+    
+    C1 -.-> Norms
+    C2 -.-> Norms
+    C3 -.-> Norms
+    
+    UpdateClip -- "C_t" --> ClipApply
+    
+    C1 --> ClipApply
+    C2 --> ClipApply
+    C3 --> ClipApply
+    
+    LayerNoise -- "Noisy Gradient" --> GlobalModel
+    GlobalModel -- "Broadcast θ" --> C1
+    GlobalModel -- "Broadcast θ" --> C2
+    GlobalModel -- "Broadcast θ" --> C3
+
+    %% Layout adjustments
+    linkStyle default stroke-width:2px,fill:none,stroke:#333;

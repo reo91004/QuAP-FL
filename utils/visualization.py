@@ -7,6 +7,7 @@ QuAP-FL 시각화 유틸리티
 - plot_training_history: 단일 실험 결과 시각화 (4-subplot)
 - plot_multi_seed_comparison: 다중 시드 결과 비교 시각화
 - generate_summary_table: 결과 테이블 생성
+- plot_paper_figures: 논문용 Figure 생성 (Figure 2, 3)
 """
 
 import os
@@ -449,3 +450,134 @@ def generate_summary_table(
     footer_str = "=" * 70
 
     return header_str + table + "\n" + footer_str
+
+
+def plot_paper_figures(
+    history: Dict,
+    num_clients: int,
+    dataset_name: str,
+    save_dir: str = './results/figures'
+):
+    """
+    논문용 Figure 생성 (Figure 2, 3)
+
+    Args:
+        history: 학습 히스토리
+        num_clients: 전체 클라이언트 수
+        dataset_name: 데이터셋 이름
+        save_dir: 저장 디렉토리
+    """
+    os.makedirs(save_dir, exist_ok=True)
+    
+    # 스타일 설정
+    plt.style.use('seaborn-v0_8-paper')
+    
+    # --- Figure 2: Accuracy Curve ---
+    plt.figure(figsize=(8, 6))
+    
+    evaluation_rounds = history.get('evaluation_rounds', [])
+    if not evaluation_rounds:
+        eval_interval = 10
+        evaluation_rounds = [i * eval_interval for i in range(len(history.get('test_accuracy', [])))]
+        
+    plt.plot(evaluation_rounds, history['test_accuracy'], 
+             linewidth=2, label='QuAP-FL', color='blue')
+    
+    # Target line
+    from config import TARGET_ACCURACY
+    if dataset_name in TARGET_ACCURACY:
+        target = TARGET_ACCURACY[dataset_name]
+        plt.axhline(y=target, color='red', linestyle='--', label=f'Target ({target})')
+        
+    plt.xlabel('Round', fontsize=12)
+    plt.ylabel('Test Accuracy', fontsize=12)
+    plt.title(f'Accuracy Convergence on {dataset_name.upper()}', fontsize=14, fontweight='bold')
+    plt.grid(True, alpha=0.3)
+    plt.legend(fontsize=10)
+    
+    plt.savefig(os.path.join(save_dir, f'{dataset_name}_accuracy_curve.png'), dpi=300, bbox_inches='tight')
+    plt.close()
+    
+    # --- Figure 3: Privacy Budget Consumption by Group ---
+    if 'client_participation' in history and 'privacy_budgets' in history:
+        plot_privacy_consumption_by_group(history, num_clients, save_dir)
+
+
+def plot_privacy_consumption_by_group(
+    history: Dict,
+    num_clients: int,
+    save_dir: str
+):
+    """
+    그룹별 프라이버시 예산 소모량 시각화 (Figure 3)
+    
+    Frequent (Top 20%) vs Sporadic (Bottom 20%)
+    """
+    client_participation = history['client_participation'] # List[List[int]]
+    privacy_budgets = history['privacy_budgets'] # List[float] (round-level epsilon)
+    
+    num_rounds = len(client_participation)
+    
+    # 각 클라이언트의 라운드별 누적 예산 계산
+    # epsilon_i(t) = epsilon_round (if participated) else 0
+    # Note: QuAP-FL에서 epsilon_round는 '평균 참여율'에 기반해 계산된 라운드 예산임.
+    # 실제로 각 클라이언트가 소모하는 예산은 해당 라운드에 참여했을 때 할당받은 예산임.
+    # 여기서는 근사적으로 해당 라운드의 epsilon_round를 소모했다고 가정하거나,
+    # 더 정확하게는 각 클라이언트의 참여율을 다시 계산해서 epsilon_i를 구해야 함.
+    # 논문의 의도는 "참여했을 때 받는 예산"이 아니라 "누적 소모량"이므로,
+    # 참여한 라운드의 epsilon을 더해나감.
+    
+    client_cumulative_epsilon = np.zeros((num_clients, num_rounds))
+    client_participation_counts = np.zeros(num_clients)
+    
+    current_cumulative = np.zeros(num_clients)
+    
+    for t in range(num_rounds):
+        # 이번 라운드 예산 (서버가 정한 값)
+        # 주의: history['privacy_budgets']에는 해당 라운드의 epsilon이 저장됨
+        if t < len(privacy_budgets):
+            eps_t = privacy_budgets[t]
+        else:
+            eps_t = 0.0
+            
+        participating_clients = client_participation[t]
+        
+        for cid in participating_clients:
+            client_participation_counts[cid] += 1
+            current_cumulative[cid] += eps_t
+            
+        client_cumulative_epsilon[:, t] = current_cumulative
+        
+    # 그룹 분류 (Top 20% vs Bottom 20%)
+    sorted_indices = np.argsort(client_participation_counts)
+    top_20_count = int(num_clients * 0.2)
+    
+    sporadic_indices = sorted_indices[:top_20_count]
+    frequent_indices = sorted_indices[-top_20_count:]
+    
+    # 그룹별 평균 누적 예산
+    sporadic_curve = np.mean(client_cumulative_epsilon[sporadic_indices], axis=0)
+    frequent_curve = np.mean(client_cumulative_epsilon[frequent_indices], axis=0)
+    
+    # Plot
+    plt.figure(figsize=(8, 6))
+    rounds = range(1, num_rounds + 1)
+    
+    plt.plot(rounds, frequent_curve, label='Frequent Participants (Top 20%)', 
+             color='red', linewidth=2, linestyle='-')
+    plt.plot(rounds, sporadic_curve, label='Sporadic Participants (Bottom 20%)', 
+             color='blue', linewidth=2, linestyle='--')
+    
+    # Total Budget Line
+    from config import HYPERPARAMETERS
+    total_epsilon = HYPERPARAMETERS.get('epsilon_total', 6.0)
+    plt.axhline(y=total_epsilon, color='black', linestyle=':', label='Total Budget Limit')
+    
+    plt.xlabel('Round', fontsize=12)
+    plt.ylabel('Cumulative Privacy Budget (ε)', fontsize=12)
+    plt.title('Privacy Budget Consumption by Participation Group', fontsize=14, fontweight='bold')
+    plt.grid(True, alpha=0.3)
+    plt.legend(fontsize=10)
+    
+    plt.savefig(os.path.join(save_dir, 'privacy_budget_by_group.png'), dpi=300, bbox_inches='tight')
+    plt.close()

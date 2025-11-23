@@ -134,7 +134,8 @@ class QuAPFLServer:
             'noise_stats': [],
             'participation_stats': [],
             'privacy_budgets': [],
-            'evaluation_rounds': []
+            'evaluation_rounds': [],
+            'client_participation': []  # 매 라운드 참여한 클라이언트 ID 리스트 저장
         }
 
         # 현재 라운드
@@ -545,6 +546,7 @@ class QuAPFLServer:
 
             # 1. 클라이언트 선택
             selected_clients = self.select_clients(round_t)
+            self.history['client_participation'].append(selected_clients)
 
             # 2. 참여 이력 업데이트 (노이즈 추가 전에!)
             # Warm-up 기간에는 추적을 건너뛰거나 업데이트만 하고 예산 계산에는 쓰지 않음
