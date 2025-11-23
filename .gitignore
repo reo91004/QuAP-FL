@@ -110,3 +110,26 @@ temp/
 # claude
 .claude/
 CLAUDE.md
+
+# LaTeX
+*.aux
+*.fls
+*.out
+*.log
+*.fdb_latexmk
+*.synctex.gz
+*.toc
+*.lof
+*.lot
+*.bbl
+*.blg
+*.bcf
+*.run.xml
+*.nav
+*.snm
+*.vrb
+*.dvi
+*.ps
+*.synctex(busy)
+*.bak
+*.sav
