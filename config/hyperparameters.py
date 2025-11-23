@@ -44,7 +44,7 @@ HYPERPARAMETERS = {
 
     # Layer-wise DP 설정
     'noise_strategy': 'layer_wise',  # 'layer_wise' | 'full'
-    'critical_layers': ['fc2'],      # 마지막 classification layer
+    'critical_layers': ['fc1', 'fc2', 'fc3'],      # 전체 Classification Head 보호
 }
 
 PRIVACY_CONFIG = {
